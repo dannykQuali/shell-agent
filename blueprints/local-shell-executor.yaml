@@ -55,32 +55,38 @@ grains:
                 COMBINED=$(mktemp)
                 echo '#!/bin/bash' > "$COMBINED"
                 
-                # Add finally trap if provided
+                # Add finally trap if provided - wrapped with </dev/null to prevent stdin reads
                 if [ -s "$FINALLY_FILE" ]; then
                   echo '__finally() {' >> "$COMBINED"
+                  echo '(' >> "$COMBINED"
                   cat "$FINALLY_FILE" >> "$COMBINED"
                   echo '' >> "$COMBINED"
+                  echo ') </dev/null' >> "$COMBINED"
                   echo '}' >> "$COMBINED"
                   echo 'trap __finally EXIT' >> "$COMBINED"
                 fi
                 
-                # Add init commands if provided
+                # Add init commands if provided - wrapped with </dev/null to prevent stdin reads
                 if [ -s "$INIT_FILE" ]; then
                   echo "=== Running init commands ==="
+                  echo '(' >> "$COMBINED"
                   cat "$INIT_FILE" >> "$COMBINED"
                   echo '' >> "$COMBINED"
+                  echo ') </dev/null' >> "$COMBINED"
                 fi
                 
-                # Add main command
+                # Add main command - wrapped with </dev/null to prevent stdin reads
+                echo '(' >> "$COMBINED"
                 cat "$SCRIPT_FILE" >> "$COMBINED"
                 echo '' >> "$COMBINED"
+                echo ') </dev/null' >> "$COMBINED"
                 
                 chmod +x "$COMBINED"
                 
                 echo "=== Executing on agent container ==="
                 echo "=== Output (streaming) ========================================================================================================================="
                 
-                # Run the script
+                # Run the script (commands inside already have </dev/null protection)
                 set +e
                 bash "$COMBINED" 2>&1 | tee "$OUTPUT_FILE"
                 CMD_EXIT_CODE=${PIPESTATUS[0]}

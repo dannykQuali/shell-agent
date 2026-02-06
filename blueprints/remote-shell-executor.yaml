@@ -71,24 +71,31 @@ grains:
                 # Build remote script
                 echo '#!/bin/bash' > "$REMOTE_SCRIPT"
                 
-                # Add finally trap if provided
+                # Add finally trap if provided - wrapped with </dev/null to prevent stdin reads
                 if [ -s "$FINALLY_FILE" ]; then
                   echo '__finally() {' >> "$REMOTE_SCRIPT"
+                  echo '(' >> "$REMOTE_SCRIPT"
                   cat "$FINALLY_FILE" >> "$REMOTE_SCRIPT"
                   echo '' >> "$REMOTE_SCRIPT"
+                  echo ') </dev/null' >> "$REMOTE_SCRIPT"
                   echo '}' >> "$REMOTE_SCRIPT"
                   echo 'trap __finally EXIT' >> "$REMOTE_SCRIPT"
                 fi
                 
-                # Add init commands if provided
+                # Add init commands if provided - wrapped with </dev/null to prevent stdin reads
                 if [ -s "$INIT_FILE" ]; then
+                  echo '(' >> "$REMOTE_SCRIPT"
                   cat "$INIT_FILE" >> "$REMOTE_SCRIPT"
                   echo '' >> "$REMOTE_SCRIPT"
+                  echo ') </dev/null' >> "$REMOTE_SCRIPT"
                 fi
                 
-                # Add main command
+                # Add main command - wrapped with </dev/null to prevent stdin reads from hanging
+                # since this is a non-interactive execution context
+                echo '(' >> "$REMOTE_SCRIPT"
                 cat "$CMD_FILE" >> "$REMOTE_SCRIPT"
                 echo '' >> "$REMOTE_SCRIPT"
+                echo ') </dev/null' >> "$REMOTE_SCRIPT"
                 
                 echo "=== Connecting to {{ .inputs.ssh_user }}@{{ .inputs.target_ip }} ==="
                 echo "=== Output (streaming) ========================================================================================================================="
