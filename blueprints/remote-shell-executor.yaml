@@ -47,6 +47,7 @@ grains:
           commands:
             - name: run_ssh
               command: |
+                echo "=== Beginning of execution ====================================================================================================================="
                 # Save the private key to temp file (key is passed as-is in PEM format)
                 KEY_FILE=$(mktemp)
                 cat << 'KEYEOF' > "$KEY_FILE"
@@ -85,7 +86,7 @@ grains:
                   echo "=== Init commands configured ==="
                 fi
                 echo "=== Executing: {{ .inputs.command }} ==="
-                echo "=== Output (streaming) ==="
+                echo "=== Output (streaming) ========================================================================================================================="
                 
                 # Run the SSH command with output streaming via tee
                 # This shows output in real-time in Torque logs while also capturing it
