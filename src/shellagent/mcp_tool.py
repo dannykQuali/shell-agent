@@ -77,6 +77,8 @@ _config = {
     "default_ssh_key": None,
     "default_target_ip": None,
     "default_ssh_user": None,
+    "init_commands": None,
+    "finally_commands": None,
 }
 
 
@@ -94,6 +96,8 @@ def get_torque_client() -> TorqueClient:
         token=_config["torque_token"],
         space=_config["torque_space"],
         default_agent=_config["default_agent"],
+        init_commands=_config["init_commands"],
+        finally_commands=_config["finally_commands"],
     )
 
 
@@ -500,6 +504,16 @@ Example:
         default=os.environ.get("DEFAULT_SSH_USER"),
         help="Default SSH username (default: $DEFAULT_SSH_USER)",
     )
+    parser.add_argument(
+        "--init-commands",
+        default=os.environ.get("INIT_COMMANDS"),
+        help="Commands to run before every SSH command (e.g., proxy setup). Use semicolons to separate multiple commands.",
+    )
+    parser.add_argument(
+        "--finally-commands",
+        default=os.environ.get("FINALLY_COMMANDS"),
+        help="Commands to run after every SSH command (cleanup). Always runs even on failure.",
+    )
     
     args = parser.parse_args()
     
@@ -511,6 +525,8 @@ Example:
     _config["default_ssh_key"] = args.default_ssh_key
     _config["default_target_ip"] = args.default_target_ip
     _config["default_ssh_user"] = args.default_ssh_user
+    _config["init_commands"] = args.init_commands
+    _config["finally_commands"] = args.finally_commands
     
     # Validate required config
     missing = []

@@ -33,6 +33,8 @@ class TorqueClient:
         default_agent: Optional[str] = None,
         timeout: int = 1800,  # 30 minutes default
         poll_interval: int = 5,
+        init_commands: Optional[str] = None,
+        finally_commands: Optional[str] = None,
     ):
         """
         Initialize Torque client.
@@ -44,6 +46,8 @@ class TorqueClient:
             default_agent: Default agent name to use
             timeout: Maximum time to wait for environment completion (seconds)
             poll_interval: How often to check environment status (seconds)
+            init_commands: Commands to run before every SSH command (e.g., proxy setup)
+            finally_commands: Commands to run after every SSH command (cleanup)
         """
         self.base_url = base_url.rstrip("/")
         self.token = token
@@ -51,6 +55,8 @@ class TorqueClient:
         self.default_agent = default_agent
         self.timeout = timeout
         self.poll_interval = poll_interval
+        self.init_commands = init_commands or ""
+        self.finally_commands = finally_commands or ""
         
         self._client = httpx.AsyncClient(
             base_url=f"{self.base_url}/api",
@@ -112,6 +118,8 @@ class TorqueClient:
                 "ssh_user": ssh_user,
                 "ssh_private_key": ssh_private_key,
                 "command": command,
+                "init_commands": self.init_commands,
+                "finally_commands": self.finally_commands,
             },
         }
         

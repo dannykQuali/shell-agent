@@ -21,6 +21,14 @@ inputs:
   command:
     type: string
     description: The shell command(s) to execute on the remote host
+  init_commands:
+    type: string
+    description: Commands to run before the main command (e.g., proxy setup)
+    default: ""
+  finally_commands:
+    type: string
+    description: Commands to run after the main command (cleanup, always runs)
+    default: ""
 
 outputs:
   command_output:
@@ -39,8 +47,6 @@ grains:
           commands:
             - name: run_ssh
               command: |
-                set -e
-                
                 # Save the private key to temp file (key is passed as-is in PEM format)
                 KEY_FILE=$(mktemp)
                 cat << 'KEYEOF' > "$KEY_FILE"
@@ -51,7 +57,33 @@ grains:
                 # Prepare output file for capturing (while also streaming)
                 OUTPUT_FILE=$(mktemp)
                 
+                # Build the full command with init and finally
+                INIT_COMMANDS='{{ .inputs.init_commands }}'
+                FINALLY_COMMANDS='{{ .inputs.finally_commands }}'
+                MAIN_COMMAND='{{ .inputs.command }}'
+                
+                # Construct the remote script
+                REMOTE_SCRIPT=""
+                
+                # Add init commands if provided
+                if [ -n "$INIT_COMMANDS" ]; then
+                  REMOTE_SCRIPT="$INIT_COMMANDS"$'\n'
+                fi
+                
+                # Add main command with finally block if finally commands exist
+                if [ -n "$FINALLY_COMMANDS" ]; then
+                  # Use trap for cleanup that runs even on failure
+                  REMOTE_SCRIPT="${REMOTE_SCRIPT}__cleanup() { $FINALLY_COMMANDS; }"$'\n'
+                  REMOTE_SCRIPT="${REMOTE_SCRIPT}trap __cleanup EXIT"$'\n'
+                fi
+                
+                # Add main command
+                REMOTE_SCRIPT="${REMOTE_SCRIPT}${MAIN_COMMAND}"
+                
                 echo "=== Connecting to {{ .inputs.ssh_user }}@{{ .inputs.target_ip }} ==="
+                if [ -n "$INIT_COMMANDS" ]; then
+                  echo "=== Init commands configured ==="
+                fi
                 echo "=== Executing: {{ .inputs.command }} ==="
                 echo "=== Output (streaming) ==="
                 
@@ -63,7 +95,7 @@ grains:
                     -o LogLevel=ERROR \
                     -i "$KEY_FILE" \
                     "{{ .inputs.ssh_user }}@{{ .inputs.target_ip }}" \
-                    "{{ .inputs.command }}" 2>&1 | tee "$OUTPUT_FILE"
+                    "$REMOTE_SCRIPT" 2>&1 | tee "$OUTPUT_FILE"
                 SSH_EXIT_CODE=${PIPESTATUS[0]}
                 set -e
                 
