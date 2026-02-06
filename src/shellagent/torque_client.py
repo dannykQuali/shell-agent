@@ -339,8 +339,13 @@ class TorqueClient:
                                 last_log_content = log_content
                         else:
                             # Log rotation detected - try to find overlap with last 10 lines
-                            last_lines = last_log_content.split('\n')
-                            overlap_text = '\n'.join(last_lines[-10:]) if len(last_lines) >= 10 else last_log_content
+                            # Find position of 10th-to-last newline efficiently (no split)
+                            pos = len(last_log_content)
+                            for _ in range(10):
+                                pos = last_log_content.rfind('\n', 0, pos)
+                                if pos == -1:
+                                    break
+                            overlap_text = last_log_content[pos + 1:] if pos != -1 else last_log_content
                             
                             overlap_pos = log_content.find(overlap_text)
                             if overlap_pos != -1:
