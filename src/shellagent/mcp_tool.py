@@ -129,7 +129,13 @@ The following commands will KILL the Torque agent and cause the operation to fai
 These commands require MANUAL execution via direct SSH or console access.
 If you must run these commands, warn the user and DO NOT use this tool.
 
-The tool will return the command output and exit code.""",
+The tool will return the command output and exit code.
+
+**LONG-RUNNING COMMANDS:**
+Default timeout is 30 minutes. For longer commands, use the `timeout` parameter.
+Note: Output is only available after command completes (no streaming).
+For very long operations, consider running in background: `nohup command > /tmp/output.log 2>&1 &`
+Then check status with: `cat /tmp/output.log`""",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -156,6 +162,10 @@ The tool will return the command output and exit code.""",
                     "force": {
                         "type": "boolean",
                         "description": "Optional: Set to true to bypass dangerous command warnings. Use with extreme caution.",
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "Optional: Maximum time to wait for command completion in seconds. Default is 1800 (30 minutes). For long operations, increase this or run command in background.",
                     },
                 },
                 "required": ["target_ip", "ssh_user", "ssh_private_key", "command"],
@@ -258,6 +268,7 @@ async def handle_run_remote_command(arguments: dict):
     command = arguments.get("command")
     agent = arguments.get("agent")
     force = arguments.get("force", False)
+    timeout = arguments.get("timeout")  # Optional timeout override
     
     if not all([target_ip, ssh_user, ssh_private_key_path, command]):
         return [TextContent(
@@ -284,7 +295,15 @@ async def handle_run_remote_command(arguments: dict):
                 ssh_private_key=ssh_private_key,
                 command=command,
                 agent=agent,
+                timeout=timeout,
             )
+            
+            # Try to get grain log for additional context (especially useful on failures)
+            grain_log = None
+            try:
+                grain_log = await client.get_grain_log(result.environment_id)
+            except Exception:
+                pass
         
         if result.status == "completed":
             output_text = f"""Command executed successfully on {target_ip}
@@ -300,6 +319,15 @@ async def handle_run_remote_command(arguments: dict):
 
 **Status:** {result.status}
 **Error:** {result.error}"""
+            
+            # Include grain log on failure for debugging
+            if grain_log:
+                output_text += f"""
+
+**Grain Execution Log:**
+```
+{grain_log}
+```"""
         
         return [TextContent(type="text", text=output_text)]
     

@@ -4,7 +4,7 @@ Torque API Client for interacting with Quali Torque REST API.
 
 import asyncio
 import time
-from typing import Optional
+from typing import Optional, Callable, Awaitable
 from dataclasses import dataclass
 
 import httpx
@@ -31,7 +31,7 @@ class TorqueClient:
         token: str,
         space: str,
         default_agent: Optional[str] = None,
-        timeout: int = 300,
+        timeout: int = 1800,  # 30 minutes default
         poll_interval: int = 5,
     ):
         """
@@ -154,10 +154,46 @@ class TorqueClient:
         if response.status_code != 404:
             response.raise_for_status()
     
+    async def get_grain_log(self, environment_id: str) -> Optional[str]:
+        """
+        Get the grain activity log for an environment.
+        
+        Args:
+            environment_id: Environment ID
+            
+        Returns:
+            Log content as string, or None if not available
+        """
+        try:
+            env_data = await self.get_environment_status(environment_id)
+            grains = env_data.get("details", {}).get("state", {}).get("grains", [])
+            
+            if not grains:
+                return None
+            
+            # Find the Deploy activity log URL
+            grain = grains[0]
+            stages = grain.get("state", {}).get("stages", [])
+            
+            for stage in stages:
+                if stage.get("name") == "Deploy":
+                    activities = stage.get("activities", [])
+                    for activity in activities:
+                        if activity.get("name") == "Deploy" and activity.get("log"):
+                            log_url = activity["log"]
+                            # Fetch the log content
+                            response = await self._client.get(log_url)
+                            if response.status_code == 200:
+                                return response.text
+            return None
+        except Exception:
+            return None
+    
     async def wait_for_environment(
         self,
         environment_id: str,
         timeout: Optional[int] = None,
+        log_callback: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> EnvironmentResult:
         """
         Wait for environment to complete and return results.
@@ -165,12 +201,14 @@ class TorqueClient:
         Args:
             environment_id: Environment ID
             timeout: Optional timeout override
+            log_callback: Optional async callback function that receives log updates
             
         Returns:
             EnvironmentResult with command output
         """
         timeout = timeout or self.timeout
         start_time = time.time()
+        last_log_length = 0
         
         while True:
             elapsed = time.time() - start_time
@@ -182,6 +220,18 @@ class TorqueClient:
                 )
             
             env_data = await self.get_environment_status(environment_id)
+            
+            # If we have a log callback, fetch and stream the log
+            if log_callback:
+                try:
+                    log_content = await self.get_grain_log(environment_id)
+                    if log_content and len(log_content) > last_log_length:
+                        # Send only the new part of the log
+                        new_content = log_content[last_log_length:]
+                        await log_callback(new_content)
+                        last_log_length = len(log_content)
+                except Exception:
+                    pass  # Ignore log fetch errors
             
             # Status can be in different places depending on API version
             details = env_data.get("details", {})
@@ -303,6 +353,7 @@ class TorqueClient:
         command: str,
         agent: Optional[str] = None,
         auto_cleanup: bool = True,
+        timeout: Optional[int] = None,
     ) -> EnvironmentResult:
         """
         Execute a remote command and wait for result.
@@ -320,6 +371,7 @@ class TorqueClient:
             command: Command to execute
             agent: Agent name (uses default if not specified)
             auto_cleanup: Whether to automatically end the environment after completion
+            timeout: Optional timeout override in seconds
             
         Returns:
             EnvironmentResult with command output
@@ -333,7 +385,7 @@ class TorqueClient:
         )
         
         try:
-            result = await self.wait_for_environment(environment_id)
+            result = await self.wait_for_environment(environment_id, timeout=timeout)
             return result
         finally:
             if auto_cleanup:
