@@ -11,16 +11,34 @@ import re
 import sys
 import asyncio
 import argparse
-from typing import Optional
+from typing import Optional, Callable, Awaitable
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import (
     Tool,
     TextContent,
+    LoggingLevel,
 )
 
 from .torque_client import TorqueClient
+
+
+def create_log_streamer(session) -> Callable[[str], Awaitable[None]]:
+    """Create a log callback that streams to stderr and MCP client."""
+    async def stream_log(content: str) -> None:
+        try:
+            # Print the actual log content to stderr for visibility in MCP output panel
+            print(content, file=sys.stderr, end='', flush=True)
+            # Also send via MCP logging notification (for future VS Code support)
+            session.send_log_message(
+                level="info",
+                data=content,
+                logger="shellagent.grain_log"
+            )
+        except Exception:
+            pass  # Ignore streaming errors
+    return stream_log
 
 
 def format_code_block(content: str, language: str = "") -> str:
@@ -415,6 +433,14 @@ async def handle_run_remote_command(arguments: dict):
     except FileNotFoundError as e:
         return [TextContent(type="text", text=f"Error: {str(e)}")]
     
+    # Create log streamer for real-time output
+    log_callback = None
+    try:
+        session = server.request_context.session
+        log_callback = create_log_streamer(session)
+    except Exception:
+        pass  # Streaming not available
+    
     try:
         async with get_torque_client() as client:
             result = await client.execute_remote_command(
@@ -425,6 +451,7 @@ async def handle_run_remote_command(arguments: dict):
                 agent=agent,
                 timeout=timeout,
                 auto_cleanup=_config["auto_delete_environments"],
+                log_callback=log_callback,
             )
             
             # Try to get grain log for additional context (especially useful on failures)
@@ -617,6 +644,14 @@ async def handle_run_on_runner(arguments: dict):
             text="Error: Missing required parameter 'command'.",
         )]
     
+    # Create log streamer for real-time output
+    log_callback = None
+    try:
+        session = server.request_context.session
+        log_callback = create_log_streamer(session)
+    except Exception:
+        pass  # Streaming not available
+    
     try:
         async with get_torque_client() as client:
             result = await client.execute_local_command(
@@ -624,6 +659,7 @@ async def handle_run_on_runner(arguments: dict):
                 agent=agent,
                 timeout=timeout,
                 auto_cleanup=_config["auto_delete_environments"],
+                log_callback=log_callback,
             )
             
             # Try to get grain log for additional context (especially useful on failures)

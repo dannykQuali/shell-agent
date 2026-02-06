@@ -279,6 +279,9 @@ class TorqueClient:
                     for activity in activities:
                         if activity.get("name") == "Deploy" and activity.get("log"):
                             log_url = activity["log"]
+                            # Strip /api prefix if present - our client base_url already includes /api
+                            if log_url.startswith("/api/"):
+                                log_url = log_url[4:]  # Remove "/api" prefix
                             # Fetch the log content
                             response = await self._client.get(log_url)
                             if response.status_code == 200:
@@ -464,6 +467,7 @@ class TorqueClient:
         agent: Optional[str] = None,
         auto_cleanup: bool = True,
         timeout: Optional[int] = None,
+        log_callback: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> EnvironmentResult:
         """
         Execute a remote command and wait for result.
@@ -482,6 +486,7 @@ class TorqueClient:
             agent: Agent name (uses default if not specified)
             auto_cleanup: Whether to automatically end the environment after completion
             timeout: Optional timeout override in seconds
+            log_callback: Optional async callback for streaming log updates
             
         Returns:
             EnvironmentResult with command output
@@ -495,7 +500,7 @@ class TorqueClient:
         )
         
         try:
-            result = await self.wait_for_environment(environment_id, timeout=timeout)
+            result = await self.wait_for_environment(environment_id, timeout=timeout, log_callback=log_callback)
             return result
         finally:
             # Always end the environment (terminate it)
@@ -517,6 +522,7 @@ class TorqueClient:
         agent: Optional[str] = None,
         auto_cleanup: bool = True,
         timeout: Optional[int] = None,
+        log_callback: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> EnvironmentResult:
         """
         Execute a command locally on the Torque agent container.
@@ -529,6 +535,7 @@ class TorqueClient:
             agent: Agent name (uses default if not specified)
             auto_cleanup: Whether to automatically delete the environment after completion
             timeout: Optional timeout override in seconds
+            log_callback: Optional async callback for streaming log updates
             
         Returns:
             EnvironmentResult with command output
@@ -539,7 +546,7 @@ class TorqueClient:
         )
         
         try:
-            result = await self.wait_for_environment(environment_id, timeout=timeout)
+            result = await self.wait_for_environment(environment_id, timeout=timeout, log_callback=log_callback)
             return result
         finally:
             # Always end the environment (terminate it)
