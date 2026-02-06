@@ -309,7 +309,7 @@ class TorqueClient:
         """
         timeout = timeout or self.timeout
         start_time = time.time()
-        last_log_length = 0
+        last_log_content = ""  # Track actual content to detect rotation
         
         while True:
             elapsed = time.time() - start_time
@@ -326,11 +326,33 @@ class TorqueClient:
             if log_callback:
                 try:
                     log_content = await self.get_grain_log(environment_id)
-                    if log_content and len(log_content) > last_log_length:
-                        # Send only the new part of the log
-                        new_content = log_content[last_log_length:]
-                        await log_callback(new_content)
-                        last_log_length = len(log_content)
+                    if log_content:
+                        if not last_log_content:
+                            # First fetch - send everything
+                            await log_callback(log_content)
+                            last_log_content = log_content
+                        elif log_content.startswith(last_log_content):
+                            # Log grew without rotation - send only new part
+                            if len(log_content) > len(last_log_content):
+                                new_content = log_content[len(last_log_content):]
+                                await log_callback(new_content)
+                                last_log_content = log_content
+                        else:
+                            # Log rotation detected - try to find overlap with last 10 lines
+                            last_lines = last_log_content.split('\n')
+                            overlap_text = '\n'.join(last_lines[-10:]) if len(last_lines) >= 10 else last_log_content
+                            
+                            overlap_pos = log_content.find(overlap_text)
+                            if overlap_pos != -1:
+                                # Found overlap - continue from after the matched portion
+                                resume_pos = overlap_pos + len(overlap_text)
+                                if resume_pos < len(log_content):
+                                    await log_callback(log_content[resume_pos:])
+                            else:
+                                # No overlap found - show rotation marker and full new content
+                                await log_callback("\n... [log rotated] ...\n")
+                                await log_callback(log_content)
+                            last_log_content = log_content
                 except Exception:
                     pass  # Ignore log fetch errors
             
