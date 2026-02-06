@@ -247,17 +247,17 @@ Returns a detailed listing of files and directories including permissions, size,
             },
         ),
         Tool(
-            name="run_on_agent",
-            description="""Execute a shell command directly on the Torque agent container.
+            name="run_on_runner",
+            description="""Execute a shell command on a Torque runner container (no SSH target needed).
 
-This tool runs commands locally on the Torque Docker agent without SSH to any remote host.
-Useful when you need to:
-- Run scripts or tools installed on the agent
-- Execute commands that don't require a target machine
-- Test connectivity or run network diagnostics from the agent's perspective
-- Run commands that need agent-local resources
+This tool runs commands on a runner container that gets spawned by the Torque agent.
+No SSH credentials or target IP required - useful when you need to:
+- Run scripts or tools available in the runner environment
+- Execute commands that don't require a specific target machine
+- Test connectivity or run network diagnostics from the Torque infrastructure
+- Perform operations that only need the runner's capabilities
 
-No SSH credentials or target IP required - the command runs directly on the agent container.
+Note: Each command spawns a fresh runner container via the Torque agent.
 
 **LONG-RUNNING COMMANDS:**
 Default timeout is 30 minutes. For longer commands, use the `timeout` parameter.""",
@@ -355,8 +355,8 @@ async def call_tool(name: str, arguments: dict):
     elif name == "list_remote_directory":
         return await handle_list_remote_directory(arguments)
     
-    elif name == "run_on_agent":
-        return await handle_run_on_agent(arguments)
+    elif name == "run_on_runner":
+        return await handle_run_on_runner(arguments)
     
     elif name == "write_remote_file":
         return await handle_write_remote_file(arguments)
@@ -588,8 +588,8 @@ async def handle_list_remote_directory(arguments: dict):
         return [TextContent(type="text", text=f"Error listing remote directory: {str(e)}")]
 
 
-async def handle_run_on_agent(arguments: dict):
-    """Execute a command locally on the Torque agent container."""
+async def handle_run_on_runner(arguments: dict):
+    """Execute a command on a Torque runner container."""
     command = arguments.get("command")
     agent = arguments.get("agent")
     timeout = arguments.get("timeout")  # Optional timeout override
@@ -621,7 +621,7 @@ async def handle_run_on_agent(arguments: dict):
         agent_name = agent or _config["default_agent"]
         
         if result.status == "completed":
-            output_text = f"""Command executed successfully on agent `{agent_name}`
+            output_text = f"""Command executed successfully on runner (via agent `{agent_name}`)
 
 **Exit Code:** {result.exit_code}
 
@@ -632,7 +632,7 @@ async def handle_run_on_agent(arguments: dict):
 
 **Environment:** [{result.environment_id}]( {env_url} )"""
         else:
-            output_text = f"""Command execution failed on agent `{agent_name}`
+            output_text = f"""Command execution failed on runner (via agent `{agent_name}`)
 
 **Status:** {result.status}
 **Error:** {result.error}
