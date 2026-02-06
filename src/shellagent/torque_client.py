@@ -86,7 +86,7 @@ class TorqueClient:
         Args:
             target_ip: Target host IP/hostname
             ssh_user: SSH username
-            ssh_private_key: SSH private key (will be base64 encoded)
+            ssh_private_key: SSH private key (raw PEM format)
             command: Command to execute
             agent: Agent name (uses default if not specified)
             environment_name: Optional name for the environment
@@ -105,7 +105,7 @@ class TorqueClient:
         payload = {
             "blueprint_name": self.BLUEPRINT_NAME,
             "environment_name": environment_name,
-            "duration": "PT10M",  # 10 minutes - short lived
+            "duration": "PT8H",  # 8 hours
             "inputs": {
                 "agent": agent_name,
                 "target_ip": target_ip,
@@ -182,12 +182,19 @@ class TorqueClient:
                 )
             
             env_data = await self.get_environment_status(environment_id)
-            status = env_data.get("computed_status", env_data.get("status", "unknown"))
             
-            # Check if environment has completed
-            if status in ("Active", "active", "active_with_error"):
+            # Status can be in different places depending on API version
+            details = env_data.get("details", {})
+            status = details.get("computed_status") or env_data.get("computed_status") or env_data.get("status", "unknown")
+            current_state = details.get("state", {}).get("current_state", "")
+            
+            # Debug: print status for troubleshooting
+            # print(f"Environment {environment_id}: status={status}, current_state={current_state}")
+            
+            # Check if environment has completed successfully (Active means deployment done)
+            if status.lower() in ("active",):
                 # Environment deployed - extract outputs
-                outputs = env_data.get("outputs", {})
+                outputs = self._extract_outputs(env_data)
                 command_output = outputs.get("command_output", "")
                 exit_code_str = outputs.get("exit_code", "0")
                 
@@ -203,14 +210,33 @@ class TorqueClient:
                     exit_code=exit_code,
                 )
             
-            elif status in ("Ended", "ended", "EndedWithError", "ended_with_error", "Ending", "ending"):
-                return EnvironmentResult(
-                    environment_id=environment_id,
-                    status="failed",
-                    error=f"Environment ended unexpectedly with status: {status}",
-                )
+            # Environment ended - could be success or failure, check outputs
+            elif status.lower() in ("ended", "inactive") or current_state == "inactive":
+                outputs = self._extract_outputs(env_data)
+                command_output = outputs.get("command_output", "")
+                exit_code_str = outputs.get("exit_code", "")
+                
+                # If we have outputs, consider it a success
+                if command_output or exit_code_str:
+                    try:
+                        exit_code = int(exit_code_str) if exit_code_str else 0
+                    except (ValueError, TypeError):
+                        exit_code = 0
+                    
+                    return EnvironmentResult(
+                        environment_id=environment_id,
+                        status="completed",
+                        command_output=command_output,
+                        exit_code=exit_code,
+                    )
+                else:
+                    return EnvironmentResult(
+                        environment_id=environment_id,
+                        status="ended",
+                        error=f"Environment ended without outputs. Status: {status}",
+                    )
             
-            elif status in ("Error", "error", "Failed", "failed"):
+            elif status.lower() in ("active_with_error", "ended_with_error", "error", "failed", "terminating_failed"):
                 errors = env_data.get("errors", [])
                 error_msg = "; ".join(errors) if errors else f"Environment failed with status: {status}"
                 return EnvironmentResult(
@@ -219,8 +245,38 @@ class TorqueClient:
                     error=error_msg,
                 )
             
-            # Still running - wait and poll again
+            # Still launching/deploying - wait and poll again
             await asyncio.sleep(self.poll_interval)
+    
+    def _extract_outputs(self, env_data: dict) -> dict:
+        """Extract outputs from environment data, handling different API response formats."""
+        outputs = {}
+        
+        # Primary location: details.state.outputs (array of {name, value} objects)
+        state_outputs = env_data.get("details", {}).get("state", {}).get("outputs", [])
+        if isinstance(state_outputs, list):
+            for output_item in state_outputs:
+                if isinstance(output_item, dict) and "name" in output_item:
+                    outputs[output_item["name"]] = output_item.get("value", "")
+        
+        if outputs:
+            return outputs
+        
+        # Fallback: root level outputs dict
+        outputs = env_data.get("outputs", {})
+        if isinstance(outputs, dict) and outputs:
+            return outputs
+        
+        # Fallback: details.definition.outputs
+        details = env_data.get("details", {})
+        definition = details.get("definition", {})
+        def_outputs = definition.get("outputs", [])
+        if isinstance(def_outputs, list):
+            for output_item in def_outputs:
+                if isinstance(output_item, dict) and "name" in output_item:
+                    outputs[output_item["name"]] = output_item.get("value", "")
+        
+        return outputs
     
     async def execute_remote_command(
         self,

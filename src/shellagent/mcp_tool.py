@@ -21,12 +21,26 @@ from mcp.types import (
 from .torque_client import TorqueClient
 
 
+def read_ssh_key_file(file_path: str) -> str:
+    """Read SSH private key from a file path."""
+    expanded_path = os.path.expanduser(file_path)
+    
+    if not os.path.exists(expanded_path):
+        raise FileNotFoundError(f"SSH private key file not found: {file_path}")
+    
+    with open(expanded_path, 'r') as f:
+        return f.read()
+
+
 # Global configuration - set via command line args or environment variables
 _config = {
     "torque_url": None,
     "torque_token": None,
     "torque_space": None,
     "default_agent": None,
+    "default_ssh_key": None,
+    "default_target_ip": None,
+    "default_ssh_user": None,
 }
 
 
@@ -83,7 +97,7 @@ The tool will return the command output and exit code.""",
                     },
                     "ssh_private_key": {
                         "type": "string",
-                        "description": "The SSH private key content for authentication (the actual key content, not a file path)",
+                        "description": "The path to the SSH private key file for authentication (e.g., C:\\path\\to\\key.pem)",
                     },
                     "command": {
                         "type": "string",
@@ -116,7 +130,7 @@ Useful for viewing configuration files, logs, or any text file on the remote ser
                     },
                     "ssh_private_key": {
                         "type": "string",
-                        "description": "The SSH private key content for authentication",
+                        "description": "The path to the SSH private key file for authentication (e.g., C:\\path\\to\\key.pem)",
                     },
                     "file_path": {
                         "type": "string",
@@ -152,7 +166,7 @@ Returns a detailed listing of files and directories including permissions, size,
                     },
                     "ssh_private_key": {
                         "type": "string",
-                        "description": "The SSH private key content for authentication",
+                        "description": "The path to the SSH private key file for authentication (e.g., C:\\path\\to\\key.pem)",
                     },
                     "directory_path": {
                         "type": "string",
@@ -188,17 +202,22 @@ async def call_tool(name: str, arguments: dict):
 
 async def handle_run_remote_command(arguments: dict):
     """Execute a remote command."""
-    target_ip = arguments.get("target_ip")
-    ssh_user = arguments.get("ssh_user")
-    ssh_private_key = arguments.get("ssh_private_key")
+    target_ip = arguments.get("target_ip") or _config["default_target_ip"]
+    ssh_user = arguments.get("ssh_user") or _config["default_ssh_user"]
+    ssh_private_key_path = arguments.get("ssh_private_key") or _config["default_ssh_key"]
     command = arguments.get("command")
     agent = arguments.get("agent")
     
-    if not all([target_ip, ssh_user, ssh_private_key, command]):
+    if not all([target_ip, ssh_user, ssh_private_key_path, command]):
         return [TextContent(
             type="text",
-            text="Error: Missing required parameters. Need target_ip, ssh_user, ssh_private_key, and command.",
+            text="Error: Missing required parameters. Need target_ip, ssh_user, ssh_private_key, and command (or configure defaults).",
         )]
+    
+    try:
+        ssh_private_key = read_ssh_key_file(ssh_private_key_path)
+    except FileNotFoundError as e:
+        return [TextContent(type="text", text=f"Error: {str(e)}")]
     
     try:
         async with get_torque_client() as client:
@@ -233,18 +252,23 @@ async def handle_run_remote_command(arguments: dict):
 
 async def handle_read_remote_file(arguments: dict):
     """Read a remote file."""
-    target_ip = arguments.get("target_ip")
-    ssh_user = arguments.get("ssh_user")
-    ssh_private_key = arguments.get("ssh_private_key")
+    target_ip = arguments.get("target_ip") or _config["default_target_ip"]
+    ssh_user = arguments.get("ssh_user") or _config["default_ssh_user"]
+    ssh_private_key_path = arguments.get("ssh_private_key") or _config["default_ssh_key"]
     file_path = arguments.get("file_path")
     tail_lines = arguments.get("tail_lines")
     agent = arguments.get("agent")
     
-    if not all([target_ip, ssh_user, ssh_private_key, file_path]):
+    if not all([target_ip, ssh_user, ssh_private_key_path, file_path]):
         return [TextContent(
             type="text",
-            text="Error: Missing required parameters. Need target_ip, ssh_user, ssh_private_key, and file_path.",
+            text="Error: Missing required parameters. Need target_ip, ssh_user, ssh_private_key, and file_path (or configure defaults).",
         )]
+    
+    try:
+        ssh_private_key = read_ssh_key_file(ssh_private_key_path)
+    except FileNotFoundError as e:
+        return [TextContent(type="text", text=f"Error: {str(e)}")]
     
     # Build the command
     if tail_lines:
@@ -287,17 +311,22 @@ async def handle_read_remote_file(arguments: dict):
 
 async def handle_list_remote_directory(arguments: dict):
     """List a remote directory."""
-    target_ip = arguments.get("target_ip")
-    ssh_user = arguments.get("ssh_user")
-    ssh_private_key = arguments.get("ssh_private_key")
+    target_ip = arguments.get("target_ip") or _config["default_target_ip"]
+    ssh_user = arguments.get("ssh_user") or _config["default_ssh_user"]
+    ssh_private_key_path = arguments.get("ssh_private_key") or _config["default_ssh_key"]
     directory_path = arguments.get("directory_path", "~")
     agent = arguments.get("agent")
     
-    if not all([target_ip, ssh_user, ssh_private_key]):
+    if not all([target_ip, ssh_user, ssh_private_key_path]):
         return [TextContent(
             type="text",
-            text="Error: Missing required parameters. Need target_ip, ssh_user, and ssh_private_key.",
+            text="Error: Missing required parameters. Need target_ip, ssh_user, and ssh_private_key (or configure defaults).",
         )]
+    
+    try:
+        ssh_private_key = read_ssh_key_file(ssh_private_key_path)
+    except FileNotFoundError as e:
+        return [TextContent(type="text", text=f"Error: {str(e)}")]
     
     command = f"ls -la {directory_path}"
     
@@ -371,6 +400,21 @@ Example:
         default=os.environ.get("TORQUE_AGENT"),
         help="Default Torque agent name (default: $TORQUE_AGENT)",
     )
+    parser.add_argument(
+        "--default-ssh-key",
+        default=os.environ.get("DEFAULT_SSH_KEY"),
+        help="Default SSH private key file path (default: $DEFAULT_SSH_KEY)",
+    )
+    parser.add_argument(
+        "--default-target-ip",
+        default=os.environ.get("DEFAULT_TARGET_IP"),
+        help="Default target server IP/hostname (default: $DEFAULT_TARGET_IP)",
+    )
+    parser.add_argument(
+        "--default-ssh-user",
+        default=os.environ.get("DEFAULT_SSH_USER"),
+        help="Default SSH username (default: $DEFAULT_SSH_USER)",
+    )
     
     args = parser.parse_args()
     
@@ -379,6 +423,9 @@ Example:
     _config["torque_token"] = args.torque_token
     _config["torque_space"] = args.torque_space
     _config["default_agent"] = args.torque_agent
+    _config["default_ssh_key"] = args.default_ssh_key
+    _config["default_target_ip"] = args.default_target_ip
+    _config["default_ssh_user"] = args.default_ssh_user
     
     # Validate required config
     missing = []
