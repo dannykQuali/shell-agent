@@ -24,6 +24,7 @@ class TorqueClient:
     """Client for interacting with Torque REST API."""
     
     BLUEPRINT_NAME = "remote-shell-executor"
+    LOCAL_BLUEPRINT_NAME = "local-shell-executor"
     
     def __init__(
         self,
@@ -117,6 +118,52 @@ class TorqueClient:
                 "target_ip": target_ip,
                 "ssh_user": ssh_user,
                 "ssh_private_key": ssh_private_key,
+                "command": command,
+                "init_commands": self.init_commands,
+                "finally_commands": self.finally_commands,
+            },
+        }
+        
+        response = await self._client.post(
+            f"/spaces/{self.space}/environments",
+            json=payload,
+        )
+        response.raise_for_status()
+        
+        data = response.json()
+        return data["id"]
+    
+    async def start_local_environment(
+        self,
+        command: str,
+        agent: Optional[str] = None,
+        environment_name: Optional[str] = None,
+    ) -> str:
+        """
+        Start a new environment to execute command locally on the agent container.
+        
+        Args:
+            command: Command to execute
+            agent: Agent name (uses default if not specified)
+            environment_name: Optional name for the environment
+            
+        Returns:
+            Environment ID
+        """
+        agent_name = agent or self.default_agent
+        if not agent_name:
+            raise ValueError("Agent name must be provided either as argument or default")
+        
+        # Generate environment name if not provided
+        if not environment_name:
+            environment_name = f"local-cmd-{int(time.time())}"
+        
+        payload = {
+            "blueprint_name": self.LOCAL_BLUEPRINT_NAME,
+            "environment_name": environment_name,
+            "duration": "PT8H",  # 8 hours
+            "inputs": {
+                "agent": agent_name,
                 "command": command,
                 "init_commands": self.init_commands,
                 "finally_commands": self.finally_commands,
@@ -423,6 +470,54 @@ class TorqueClient:
             target_ip=target_ip,
             ssh_user=ssh_user,
             ssh_private_key=ssh_private_key,
+            command=command,
+            agent=agent,
+        )
+        
+        try:
+            result = await self.wait_for_environment(environment_id, timeout=timeout)
+            return result
+        finally:
+            # Always end the environment (terminate it)
+            try:
+                print(f"[DEBUG] Ending environment {environment_id}", flush=True)
+                await self.end_environment(environment_id)
+                print(f"[DEBUG] Environment {environment_id} ended", flush=True)
+            except Exception as e:
+                print(f"[DEBUG] Failed to end environment {environment_id}: {e}", flush=True)
+            
+            # Delete the environment only if auto_cleanup is enabled
+            if auto_cleanup:
+                try:
+                    print(f"[DEBUG] Auto-cleanup: deleting environment {environment_id}", flush=True)
+                    await self.delete_environment(environment_id)
+                    print(f"[DEBUG] Environment {environment_id} deleted successfully", flush=True)
+                except Exception as e:
+                    print(f"[DEBUG] Failed to delete environment {environment_id}: {e}", flush=True)
+    
+    async def execute_local_command(
+        self,
+        command: str,
+        agent: Optional[str] = None,
+        auto_cleanup: bool = True,
+        timeout: Optional[int] = None,
+    ) -> EnvironmentResult:
+        """
+        Execute a command locally on the Torque agent container.
+        
+        This method runs commands directly on the agent without SSH to any remote host.
+        Useful for running scripts, tools, or commands that don't require a target machine.
+        
+        Args:
+            command: Command to execute
+            agent: Agent name (uses default if not specified)
+            auto_cleanup: Whether to automatically delete the environment after completion
+            timeout: Optional timeout override in seconds
+            
+        Returns:
+            EnvironmentResult with command output
+        """
+        environment_id = await self.start_local_environment(
             command=command,
             agent=agent,
         )

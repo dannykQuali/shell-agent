@@ -245,6 +245,40 @@ Returns a detailed listing of files and directories including permissions, size,
                 "required": ["target_ip", "ssh_user", "ssh_private_key"],
             },
         ),
+        Tool(
+            name="run_on_agent",
+            description="""Execute a shell command directly on the Torque agent container.
+
+This tool runs commands locally on the Torque Docker agent without SSH to any remote host.
+Useful when you need to:
+- Run scripts or tools installed on the agent
+- Execute commands that don't require a target machine
+- Test connectivity or run network diagnostics from the agent's perspective
+- Run commands that need agent-local resources
+
+No SSH credentials or target IP required - the command runs directly on the agent container.
+
+**LONG-RUNNING COMMANDS:**
+Default timeout is 30 minutes. For longer commands, use the `timeout` parameter.""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "The shell command to execute on the agent container",
+                    },
+                    "agent": {
+                        "type": "string",
+                        "description": "Optional: The Torque agent name to use. If not specified, uses the default agent.",
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "Optional: Maximum time to wait for command completion in seconds. Default is 1800 (30 minutes).",
+                    },
+                },
+                "required": ["command"],
+            },
+        ),
     ]
 
 
@@ -260,6 +294,9 @@ async def call_tool(name: str, arguments: dict):
     
     elif name == "list_remote_directory":
         return await handle_list_remote_directory(arguments)
+    
+    elif name == "run_on_agent":
+        return await handle_run_on_agent(arguments)
     
     else:
         return [TextContent(type="text", text=f"Unknown tool: {name}")]
@@ -324,14 +361,14 @@ async def handle_run_remote_command(arguments: dict):
 {result.command_output}
 ```
 
-**Environment:** [{result.environment_id}]({env_url})"""
+**Environment:** [{result.environment_id}]( {env_url} )"""
         else:
             output_text = f"""Command execution failed on {target_ip}
 
 **Status:** {result.status}
 **Error:** {result.error}
 
-**Environment:** [{result.environment_id}]({env_url})"""
+**Environment:** [{result.environment_id}]( {env_url} )"""
             
             # Include grain log on failure for debugging
             if grain_log:
@@ -394,21 +431,21 @@ async def handle_read_remote_file(arguments: dict):
 {result.command_output}
 ```
 
-**Environment:** [{result.environment_id}]({env_url})"""
+**Environment:** [{result.environment_id}]( {env_url} )"""
         elif result.status == "completed":
             output_text = f"""Failed to read file `{file_path}` on {target_ip}
 
 **Exit Code:** {result.exit_code}
 **Output:** {result.command_output}
 
-**Environment:** [{result.environment_id}]({env_url})"""
+**Environment:** [{result.environment_id}]( {env_url} )"""
         else:
             output_text = f"""Failed to read file on {target_ip}
 
 **Status:** {result.status}
 **Error:** {result.error}
 
-**Environment:** [{result.environment_id}]({env_url})"""
+**Environment:** [{result.environment_id}]( {env_url} )"""
         
         return [TextContent(type="text", text=output_text)]
     
@@ -457,26 +494,92 @@ async def handle_list_remote_directory(arguments: dict):
 {result.command_output}
 ```
 
-**Environment:** [{result.environment_id}]({env_url})"""
+**Environment:** [{result.environment_id}]( {env_url} )"""
         elif result.status == "completed":
             output_text = f"""Failed to list directory `{directory_path}` on {target_ip}
 
 **Exit Code:** {result.exit_code}
 **Output:** {result.command_output}
 
-**Environment:** [{result.environment_id}]({env_url})"""
+**Environment:** [{result.environment_id}]( {env_url} )"""
         else:
             output_text = f"""Failed to list directory on {target_ip}
 
 **Status:** {result.status}
 **Error:** {result.error}
 
-**Environment:** [{result.environment_id}]({env_url})"""
+**Environment:** [{result.environment_id}]( {env_url} )"""
         
         return [TextContent(type="text", text=output_text)]
     
     except Exception as e:
         return [TextContent(type="text", text=f"Error listing remote directory: {str(e)}")]
+
+
+async def handle_run_on_agent(arguments: dict):
+    """Execute a command locally on the Torque agent container."""
+    command = arguments.get("command")
+    agent = arguments.get("agent")
+    timeout = arguments.get("timeout")  # Optional timeout override
+    
+    if not command:
+        return [TextContent(
+            type="text",
+            text="Error: Missing required parameter 'command'.",
+        )]
+    
+    try:
+        async with get_torque_client() as client:
+            result = await client.execute_local_command(
+                command=command,
+                agent=agent,
+                timeout=timeout,
+                auto_cleanup=_config["auto_delete_environments"],
+            )
+            
+            # Try to get grain log for additional context (especially useful on failures)
+            grain_log = None
+            try:
+                grain_log = await client.get_grain_log(result.environment_id)
+            except Exception:
+                pass
+        
+        # Build environment URL for reference
+        env_url = f"{_config['torque_url']}/{_config['torque_space']}/environments/{result.environment_id}"
+        agent_name = agent or _config["default_agent"]
+        
+        if result.status == "completed":
+            output_text = f"""Command executed successfully on agent `{agent_name}`
+
+**Exit Code:** {result.exit_code}
+
+**Output:**
+```
+{result.command_output}
+```
+
+**Environment:** [{result.environment_id}]( {env_url} )"""
+        else:
+            output_text = f"""Command execution failed on agent `{agent_name}`
+
+**Status:** {result.status}
+**Error:** {result.error}
+
+**Environment:** [{result.environment_id}]( {env_url} )"""
+            
+            # Include grain log on failure for debugging
+            if grain_log:
+                output_text += f"""
+
+**Grain Execution Log:**
+```
+{grain_log}
+```"""
+        
+        return [TextContent(type="text", text=output_text)]
+    
+    except Exception as e:
+        return [TextContent(type="text", text=f"Error executing command on agent: {str(e)}")]
 
 
 def main():
