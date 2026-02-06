@@ -4,6 +4,7 @@ Torque API Client for interacting with Quali Torque REST API.
 
 import asyncio
 import base64
+import sys
 import time
 from typing import Optional, Callable, Awaitable
 from dataclasses import dataclass
@@ -233,11 +234,10 @@ class TorqueClient:
             try:
                 env_data = await self.get_environment_status(environment_id)
                 status = env_data.get("details", {}).get("computed_status", "").lower().replace(" ", "_")
-                print(f"[DEBUG] Waiting for end, current status: {status}", flush=True)
                 if status in ("ended", "terminating", "terminated"):
                     break
             except Exception as e:
-                print(f"[DEBUG] Error getting status (may be gone): {e}", flush=True)
+                print(f"[WARNING] Error getting environment status (may be gone): {e}", file=sys.stderr)
                 return  # Environment may already be gone
             await asyncio.sleep(5)
         
@@ -245,9 +245,6 @@ class TorqueClient:
         response = await self._client.delete(
             f"/spaces/{self.space}/environments/{environment_id}/remove_state"
         )
-        print(f"[DEBUG] Delete (remove_state) response: status={response.status_code}", flush=True)
-        if response.status_code not in (200, 202, 204, 404):
-            print(f"[DEBUG] Delete response body: {response.text[:500] if response.text else 'empty'}", flush=True)
         # 404 is ok - environment may have already been deleted
         if response.status_code != 404:
             response.raise_for_status()
@@ -503,20 +500,16 @@ class TorqueClient:
         finally:
             # Always end the environment (terminate it)
             try:
-                print(f"[DEBUG] Ending environment {environment_id}", flush=True)
                 await self.end_environment(environment_id)
-                print(f"[DEBUG] Environment {environment_id} ended", flush=True)
             except Exception as e:
-                print(f"[DEBUG] Failed to end environment {environment_id}: {e}", flush=True)
+                print(f"[WARNING] Failed to end environment {environment_id}: {e}", file=sys.stderr)
             
             # Delete the environment only if auto_cleanup is enabled
             if auto_cleanup:
                 try:
-                    print(f"[DEBUG] Auto-cleanup: deleting environment {environment_id}", flush=True)
                     await self.delete_environment(environment_id)
-                    print(f"[DEBUG] Environment {environment_id} deleted successfully", flush=True)
                 except Exception as e:
-                    print(f"[DEBUG] Failed to delete environment {environment_id}: {e}", flush=True)
+                    print(f"[WARNING] Failed to delete environment {environment_id}: {e}", file=sys.stderr)
     
     async def execute_local_command(
         self,
@@ -551,17 +544,13 @@ class TorqueClient:
         finally:
             # Always end the environment (terminate it)
             try:
-                print(f"[DEBUG] Ending environment {environment_id}", flush=True)
                 await self.end_environment(environment_id)
-                print(f"[DEBUG] Environment {environment_id} ended", flush=True)
             except Exception as e:
-                print(f"[DEBUG] Failed to end environment {environment_id}: {e}", flush=True)
+                print(f"[WARNING] Failed to end environment {environment_id}: {e}", file=sys.stderr)
             
             # Delete the environment only if auto_cleanup is enabled
             if auto_cleanup:
                 try:
-                    print(f"[DEBUG] Auto-cleanup: deleting environment {environment_id}", flush=True)
                     await self.delete_environment(environment_id)
-                    print(f"[DEBUG] Environment {environment_id} deleted successfully", flush=True)
                 except Exception as e:
-                    print(f"[DEBUG] Failed to delete environment {environment_id}: {e}", flush=True)
+                    print(f"[WARNING] Failed to delete environment {environment_id}: {e}", file=sys.stderr)

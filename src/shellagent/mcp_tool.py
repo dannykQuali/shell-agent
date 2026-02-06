@@ -868,9 +868,6 @@ Example:
     _config["finally_commands"] = args.finally_commands
     _config["auto_delete_environments"] = args.auto_delete_environments
     
-    # Debug: Print config at startup
-    print(f"[DEBUG] auto_delete_environments = {_config['auto_delete_environments']}", file=sys.stderr, flush=True)
-    
     # Validate required config
     missing = []
     if not _config["torque_url"]:
