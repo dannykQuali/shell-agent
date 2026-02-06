@@ -1,0 +1,95 @@
+spec_version: 2
+description: |
+  Execute shell commands directly on the Torque agent container.
+  This blueprint runs commands locally on the agent without SSH to any remote host.
+  Useful for running scripts, tools, or commands that don't require a target machine.
+
+inputs:
+  agent:
+    type: agent
+    description: The Torque agent to use for execution
+  command:
+    type: string
+    description: The shell command(s) to execute on the agent
+  init_commands:
+    type: string
+    description: Commands to run before the main command (e.g., environment setup)
+    default: ""
+  finally_commands:
+    type: string
+    description: Commands to run after the main command (cleanup, always runs)
+    default: ""
+
+outputs:
+  command_output:
+    value: '{{ .grains.local_executor.activities.deploy.commands.run_local.outputs.command_output }}'
+  exit_code:
+    value: '{{ .grains.local_executor.activities.deploy.commands.run_local.outputs.exit_code }}'
+
+grains:
+  local_executor:
+    kind: shell
+    spec:
+      agent:
+        name: '{{ .inputs.agent }}'
+      activities:
+        deploy:
+          commands:
+            - name: run_local
+              command: |
+                echo "=== Beginning of local execution ============================================================================================================="
+                
+                # Prepare output file for capturing (while also streaming)
+                OUTPUT_FILE=$(mktemp)
+                
+                # Build the full command with init and finally
+                INIT_COMMANDS='{{ .inputs.init_commands }}'
+                FINALLY_COMMANDS='{{ .inputs.finally_commands }}'
+                MAIN_COMMAND='{{ .inputs.command }}'
+                
+                # Construct the script
+                SCRIPT=""
+                
+                # Add init commands if provided
+                if [ -n "$INIT_COMMANDS" ]; then
+                  SCRIPT="$INIT_COMMANDS"$'\n'
+                fi
+                
+                # Add main command with finally block if finally commands exist
+                if [ -n "$FINALLY_COMMANDS" ]; then
+                  # Use trap for cleanup that runs even on failure
+                  SCRIPT="${SCRIPT}__cleanup() { $FINALLY_COMMANDS; }"$'\n'
+                  SCRIPT="${SCRIPT}trap __cleanup EXIT"$'\n'
+                fi
+                
+                # Add main command
+                SCRIPT="${SCRIPT}${MAIN_COMMAND}"
+                
+                echo "=== Executing on agent container ==="
+                if [ -n "$INIT_COMMANDS" ]; then
+                  echo "=== Init commands configured ==="
+                fi
+                echo "=== Command: {{ .inputs.command }} ==="
+                echo "=== Output (streaming) ========================================================================================================================="
+                
+                # Run the command with output streaming via tee
+                set +e
+                bash -c "$SCRIPT" 2>&1 | tee "$OUTPUT_FILE"
+                CMD_EXIT_CODE=${PIPESTATUS[0]}
+                set -e
+                
+                # Read captured output
+                COMMAND_OUTPUT=$(cat "$OUTPUT_FILE")
+                
+                # Cleanup
+                rm -f "$OUTPUT_FILE"
+                
+                # Export outputs for Torque to capture
+                export command_output="$COMMAND_OUTPUT"
+                export exit_code="$CMD_EXIT_CODE"
+                
+                echo ""
+                echo "=== Command completed with exit code: $CMD_EXIT_CODE ==="
+              outputs:
+                - command_output
+                - exit_code
