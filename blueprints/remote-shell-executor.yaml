@@ -58,26 +58,34 @@ grains:
                 OUTPUT_FILE=$(mktemp)
                 REMOTE_SCRIPT=$(mktemp)
                 
-                # Decode base64 inputs
-                MAIN_CMD=$(echo '{{ .inputs.command_b64 }}' | base64 -d)
-                INIT_CMD=$(echo '{{ .inputs.init_commands_b64 }}' | base64 -d 2>/dev/null || true)
-                FINALLY_CMD=$(echo '{{ .inputs.finally_commands_b64 }}' | base64 -d 2>/dev/null || true)
+                # Decode base64 inputs to files
+                CMD_FILE=$(mktemp)
+                echo '{{ .inputs.command_b64 }}' | base64 -d > "$CMD_FILE"
                 
+                INIT_FILE=$(mktemp)
+                echo '{{ .inputs.init_commands_b64 }}' | base64 -d > "$INIT_FILE" 2>/dev/null || true
+                
+                FINALLY_FILE=$(mktemp)
+                echo '{{ .inputs.finally_commands_b64 }}' | base64 -d > "$FINALLY_FILE" 2>/dev/null || true
+                
+                # Build remote script
                 echo '#!/bin/bash' > "$REMOTE_SCRIPT"
                 
                 # Add finally trap if provided
-                if [ -n "$FINALLY_CMD" ]; then
-                  echo "__finally() { $FINALLY_CMD; }" >> "$REMOTE_SCRIPT"
+                if [ -s "$FINALLY_FILE" ]; then
+                  echo '__finally() {' >> "$REMOTE_SCRIPT"
+                  cat "$FINALLY_FILE" >> "$REMOTE_SCRIPT"
+                  echo '}' >> "$REMOTE_SCRIPT"
                   echo 'trap __finally EXIT' >> "$REMOTE_SCRIPT"
                 fi
                 
                 # Add init commands if provided
-                if [ -n "$INIT_CMD" ]; then
-                  echo "$INIT_CMD" >> "$REMOTE_SCRIPT"
+                if [ -s "$INIT_FILE" ]; then
+                  cat "$INIT_FILE" >> "$REMOTE_SCRIPT"
                 fi
                 
                 # Add main command
-                echo "$MAIN_CMD" >> "$REMOTE_SCRIPT"
+                cat "$CMD_FILE" >> "$REMOTE_SCRIPT"
                 
                 echo "=== Connecting to {{ .inputs.ssh_user }}@{{ .inputs.target_ip }} ==="
                 echo "=== Output (streaming) ========================================================================================================================="
@@ -93,7 +101,7 @@ grains:
                 set -e
                 
                 COMMAND_OUTPUT=$(cat "$OUTPUT_FILE")
-                rm -f "$KEY_FILE" "$OUTPUT_FILE" "$REMOTE_SCRIPT"
+                rm -f "$KEY_FILE" "$OUTPUT_FILE" "$REMOTE_SCRIPT" "$CMD_FILE" "$INIT_FILE" "$FINALLY_FILE"
                 
                 export command_output="$COMMAND_OUTPUT"
                 export exit_code="$SSH_EXIT_CODE"

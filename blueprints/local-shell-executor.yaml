@@ -40,35 +40,51 @@ grains:
                 echo "=== Beginning of local execution ============================================================================================================="
                 
                 OUTPUT_FILE=$(mktemp)
+                SCRIPT_FILE=$(mktemp)
                 
-                # Decode base64 inputs
-                MAIN_CMD=$(echo '{{ .inputs.command_b64 }}' | base64 -d)
-                INIT_CMD=$(echo '{{ .inputs.init_commands_b64 }}' | base64 -d 2>/dev/null || true)
-                FINALLY_CMD=$(echo '{{ .inputs.finally_commands_b64 }}' | base64 -d 2>/dev/null || true)
+                # Decode base64 inputs directly to files
+                echo '{{ .inputs.command_b64 }}' | base64 -d > "$SCRIPT_FILE"
                 
-                # Setup finally trap if provided
-                if [ -n "$FINALLY_CMD" ]; then
-                  eval "__finally() { $FINALLY_CMD; }"
-                  trap __finally EXIT
+                INIT_FILE=$(mktemp)
+                echo '{{ .inputs.init_commands_b64 }}' | base64 -d > "$INIT_FILE" 2>/dev/null || true
+                
+                FINALLY_FILE=$(mktemp)
+                echo '{{ .inputs.finally_commands_b64 }}' | base64 -d > "$FINALLY_FILE" 2>/dev/null || true
+                
+                # Build combined script
+                COMBINED=$(mktemp)
+                echo '#!/bin/bash' > "$COMBINED"
+                
+                # Add finally trap if provided
+                if [ -s "$FINALLY_FILE" ]; then
+                  echo '__finally() {' >> "$COMBINED"
+                  cat "$FINALLY_FILE" >> "$COMBINED"
+                  echo '}' >> "$COMBINED"
+                  echo 'trap __finally EXIT' >> "$COMBINED"
                 fi
                 
-                # Run init commands if provided
-                if [ -n "$INIT_CMD" ]; then
+                # Add init commands if provided
+                if [ -s "$INIT_FILE" ]; then
                   echo "=== Running init commands ==="
-                  eval "$INIT_CMD"
+                  cat "$INIT_FILE" >> "$COMBINED"
                 fi
+                
+                # Add main command
+                cat "$SCRIPT_FILE" >> "$COMBINED"
+                
+                chmod +x "$COMBINED"
                 
                 echo "=== Executing on agent container ==="
                 echo "=== Output (streaming) ========================================================================================================================="
                 
-                # Run the main command
+                # Run the script
                 set +e
-                eval "$MAIN_CMD" 2>&1 | tee "$OUTPUT_FILE"
+                bash "$COMBINED" 2>&1 | tee "$OUTPUT_FILE"
                 CMD_EXIT_CODE=${PIPESTATUS[0]}
                 set -e
                 
                 COMMAND_OUTPUT=$(cat "$OUTPUT_FILE")
-                rm -f "$OUTPUT_FILE"
+                rm -f "$OUTPUT_FILE" "$SCRIPT_FILE" "$INIT_FILE" "$FINALLY_FILE" "$COMBINED"
                 
                 export command_output="$COMMAND_OUTPUT"
                 export exit_code="$CMD_EXIT_CODE"
