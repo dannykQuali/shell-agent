@@ -7,6 +7,7 @@ by leveraging Torque's Shell Grain infrastructure.
 
 import base64
 import os
+import re
 import sys
 import asyncio
 import argparse
@@ -20,6 +21,28 @@ from mcp.types import (
 )
 
 from .torque_client import TorqueClient
+
+
+def format_code_block(content: str, language: str = "") -> str:
+    """Format content as a markdown code block, handling content that contains backticks.
+    
+    Uses the minimum number of backticks needed to avoid conflicts with the content.
+    Ensures proper line endings to avoid syntax highlighting bleed.
+    """
+    if not content:
+        return f"```{language}\n```\n"
+    
+    # Find the longest sequence of backticks in the content
+    backtick_sequences = re.findall(r'`+', content)
+    max_backticks = max((len(seq) for seq in backtick_sequences), default=0)
+    
+    # Use at least 3 backticks, or one more than the longest sequence in content
+    fence_length = max(3, max_backticks + 1)
+    fence = '`' * fence_length
+    
+    # Ensure content ends with newline, and add blank line after closing fence
+    content = content.rstrip('\n')
+    return f"{fence}{language}\n{content}\n{fence}\n"
 
 
 # Dangerous commands that can kill the Torque agent
@@ -415,32 +438,30 @@ async def handle_run_remote_command(arguments: dict):
         env_url = f"{_config['torque_url']}/{_config['torque_space']}/environments/{result.environment_id}"
         
         if result.status == "completed":
+            output_block = format_code_block(result.command_output)
             output_text = f"""Command executed successfully on {target_ip}
 
 **Exit Code:** {result.exit_code}
 
 **Output:**
-```
-{result.command_output}
-```
+{output_block}
 
-**Environment:** [{result.environment_id}]( {env_url} )"""
+**Environment:** `{result.environment_id}` - {env_url}"""
         else:
             output_text = f"""Command execution failed on {target_ip}
 
 **Status:** {result.status}
 **Error:** {result.error}
 
-**Environment:** [{result.environment_id}]( {env_url} )"""
+**Environment:** `{result.environment_id}` - {env_url}"""
             
             # Include grain log on failure for debugging
             if grain_log:
+                log_block = format_code_block(grain_log)
                 output_text += f"""
 
 **Grain Execution Log:**
-```
-{grain_log}
-```"""
+{log_block}"""
         
         return [TextContent(type="text", text=output_text)]
     
@@ -499,25 +520,23 @@ async def handle_read_remote_file(arguments: dict):
             
             output_text = f"""Contents of `{file_path}` on {target_ip}:
 
-```
-{file_content}
-```
+{format_code_block(file_content)}
 
-**Environment:** [{result.environment_id}]( {env_url} )"""
+**Environment:** `{result.environment_id}` - {env_url}"""
         elif result.status == "completed":
             output_text = f"""Failed to read file `{file_path}` on {target_ip}
 
 **Exit Code:** {result.exit_code}
 **Output:** {result.command_output}
 
-**Environment:** [{result.environment_id}]( {env_url} )"""
+**Environment:** `{result.environment_id}` - {env_url}"""
         else:
             output_text = f"""Failed to read file on {target_ip}
 
 **Status:** {result.status}
 **Error:** {result.error}
 
-**Environment:** [{result.environment_id}]( {env_url} )"""
+**Environment:** `{result.environment_id}` - {env_url}"""
         
         return [TextContent(type="text", text=output_text)]
     
@@ -562,25 +581,23 @@ async def handle_list_remote_directory(arguments: dict):
         if result.status == "completed" and result.exit_code == 0:
             output_text = f"""Contents of `{directory_path}` on {target_ip}:
 
-```
-{result.command_output}
-```
+{format_code_block(result.command_output)}
 
-**Environment:** [{result.environment_id}]( {env_url} )"""
+**Environment:** `{result.environment_id}` - {env_url}"""
         elif result.status == "completed":
             output_text = f"""Failed to list directory `{directory_path}` on {target_ip}
 
 **Exit Code:** {result.exit_code}
 **Output:** {result.command_output}
 
-**Environment:** [{result.environment_id}]( {env_url} )"""
+**Environment:** `{result.environment_id}` - {env_url}"""
         else:
             output_text = f"""Failed to list directory on {target_ip}
 
 **Status:** {result.status}
 **Error:** {result.error}
 
-**Environment:** [{result.environment_id}]( {env_url} )"""
+**Environment:** `{result.environment_id}` - {env_url}"""
         
         return [TextContent(type="text", text=output_text)]
     
@@ -621,32 +638,30 @@ async def handle_run_on_runner(arguments: dict):
         agent_name = agent or _config["default_agent"]
         
         if result.status == "completed":
+            output_block = format_code_block(result.command_output)
             output_text = f"""Command executed successfully on runner (via agent `{agent_name}`)
 
 **Exit Code:** {result.exit_code}
 
 **Output:**
-```
-{result.command_output}
-```
+{output_block}
 
-**Environment:** [{result.environment_id}]( {env_url} )"""
+**Environment:** `{result.environment_id}` - {env_url}"""
         else:
             output_text = f"""Command execution failed on runner (via agent `{agent_name}`)
 
 **Status:** {result.status}
 **Error:** {result.error}
 
-**Environment:** [{result.environment_id}]( {env_url} )"""
+**Environment:** `{result.environment_id}` - {env_url}"""
             
             # Include grain log on failure for debugging
             if grain_log:
+                log_block = format_code_block(grain_log)
                 output_text += f"""
 
 **Grain Execution Log:**
-```
-{grain_log}
-```"""
+{log_block}"""
         
         return [TextContent(type="text", text=output_text)]
     
@@ -745,11 +760,9 @@ async def handle_write_remote_file(arguments: dict):
 **Mode:** {mode}
 
 **Output:**
-```
-{result.command_output}
-```
+{format_code_block(result.command_output)}
 
-**Environment:** [{result.environment_id}]( {env_url} )"""
+**Environment:** `{result.environment_id}` - {env_url}"""
         elif result.status == "completed":
             output_text = f"""Failed to write file to {target_ip}
 
@@ -757,14 +770,14 @@ async def handle_write_remote_file(arguments: dict):
 **Exit Code:** {result.exit_code}
 **Output:** {result.command_output}
 
-**Environment:** [{result.environment_id}]( {env_url} )"""
+**Environment:** `{result.environment_id}` - {env_url}"""
         else:
             output_text = f"""Failed to write file to {target_ip}
 
 **Status:** {result.status}
 **Error:** {result.error}
 
-**Environment:** [{result.environment_id}]( {env_url} )"""
+**Environment:** `{result.environment_id}` - {env_url}"""
         
         return [TextContent(type="text", text=output_text)]
     
