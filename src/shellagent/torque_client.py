@@ -150,7 +150,7 @@ class TorqueClient:
     
     async def end_environment(self, environment_id: str) -> None:
         """
-        End/terminate an environment.
+        End/terminate a running environment (stops execution but keeps it in the system).
         
         Args:
             environment_id: Environment ID
@@ -159,6 +159,41 @@ class TorqueClient:
             f"/spaces/{self.space}/environments/{environment_id}"
         )
         # 404 is ok - environment may have already ended
+        if response.status_code != 404:
+            response.raise_for_status()
+    
+    async def delete_environment(self, environment_id: str) -> None:
+        """
+        Delete an environment from the system (remove from history/DB).
+        Uses the /remove_state endpoint to fully purge from Torque.
+        
+        Args:
+            environment_id: Environment ID
+        """
+        # First, wait for environment to be in ended/terminated state
+        for _ in range(10):  # Wait up to 50 seconds
+            try:
+                env_data = await self.get_environment_status(environment_id)
+                status = env_data.get("details", {}).get("computed_status", "").lower().replace(" ", "_")
+                print(f"[DEBUG] Waiting for end, current status: {status}", flush=True)
+                if status in ("ended", "terminating", "terminated"):
+                    break
+            except Exception as e:
+                print(f"[DEBUG] Error getting status (may be gone): {e}", flush=True)
+                return  # Environment may already be gone
+            await asyncio.sleep(5)
+        
+        # Use the /remove_state endpoint to fully delete from DB
+        response = await self._client.delete(
+            f"/spaces/{self.space}/environments/{environment_id}/remove_state"
+        )
+        print(f"[DEBUG] Delete (remove_state) response: status={response.status_code}", flush=True)
+        if response.status_code not in (200, 202, 204, 404):
+            print(f"[DEBUG] Delete response body: {response.text[:500] if response.text else 'empty'}", flush=True)
+        # 404 is ok - environment may have already been deleted
+        if response.status_code != 404:
+            response.raise_for_status()
+        # 404 is ok - environment may have already been deleted
         if response.status_code != 404:
             response.raise_for_status()
     
@@ -396,8 +431,19 @@ class TorqueClient:
             result = await self.wait_for_environment(environment_id, timeout=timeout)
             return result
         finally:
+            # Always end the environment (terminate it)
+            try:
+                print(f"[DEBUG] Ending environment {environment_id}", flush=True)
+                await self.end_environment(environment_id)
+                print(f"[DEBUG] Environment {environment_id} ended", flush=True)
+            except Exception as e:
+                print(f"[DEBUG] Failed to end environment {environment_id}: {e}", flush=True)
+            
+            # Delete the environment only if auto_cleanup is enabled
             if auto_cleanup:
                 try:
-                    await self.end_environment(environment_id)
-                except Exception:
-                    pass  # Ignore cleanup errors
+                    print(f"[DEBUG] Auto-cleanup: deleting environment {environment_id}", flush=True)
+                    await self.delete_environment(environment_id)
+                    print(f"[DEBUG] Environment {environment_id} deleted successfully", flush=True)
+                except Exception as e:
+                    print(f"[DEBUG] Failed to delete environment {environment_id}: {e}", flush=True)

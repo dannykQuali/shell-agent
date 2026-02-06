@@ -79,6 +79,7 @@ _config = {
     "default_ssh_user": None,
     "init_commands": None,
     "finally_commands": None,
+    "auto_delete_environments": False,
 }
 
 
@@ -300,6 +301,7 @@ async def handle_run_remote_command(arguments: dict):
                 command=command,
                 agent=agent,
                 timeout=timeout,
+                auto_cleanup=_config["auto_delete_environments"],
             )
             
             # Try to get grain log for additional context (especially useful on failures)
@@ -309,6 +311,9 @@ async def handle_run_remote_command(arguments: dict):
             except Exception:
                 pass
         
+        # Build environment URL for reference
+        env_url = f"{_config['torque_url']}/{_config['torque_space']}/environments/{result.environment_id}"
+        
         if result.status == "completed":
             output_text = f"""Command executed successfully on {target_ip}
 
@@ -317,12 +322,16 @@ async def handle_run_remote_command(arguments: dict):
 **Output:**
 ```
 {result.command_output}
-```"""
+```
+
+**Environment:** [{result.environment_id}]({env_url})"""
         else:
             output_text = f"""Command execution failed on {target_ip}
 
 **Status:** {result.status}
-**Error:** {result.error}"""
+**Error:** {result.error}
+
+**Environment:** [{result.environment_id}]({env_url})"""
             
             # Include grain log on failure for debugging
             if grain_log:
@@ -375,22 +384,31 @@ async def handle_read_remote_file(arguments: dict):
                 agent=agent,
             )
         
+        # Build environment URL for reference
+        env_url = f"{_config['torque_url']}/{_config['torque_space']}/environments/{result.environment_id}"
+        
         if result.status == "completed" and result.exit_code == 0:
             output_text = f"""Contents of `{file_path}` on {target_ip}:
 
 ```
 {result.command_output}
-```"""
+```
+
+**Environment:** [{result.environment_id}]({env_url})"""
         elif result.status == "completed":
             output_text = f"""Failed to read file `{file_path}` on {target_ip}
 
 **Exit Code:** {result.exit_code}
-**Output:** {result.command_output}"""
+**Output:** {result.command_output}
+
+**Environment:** [{result.environment_id}]({env_url})"""
         else:
             output_text = f"""Failed to read file on {target_ip}
 
 **Status:** {result.status}
-**Error:** {result.error}"""
+**Error:** {result.error}
+
+**Environment:** [{result.environment_id}]({env_url})"""
         
         return [TextContent(type="text", text=output_text)]
     
@@ -429,22 +447,31 @@ async def handle_list_remote_directory(arguments: dict):
                 agent=agent,
             )
         
+        # Build environment URL for reference
+        env_url = f"{_config['torque_url']}/{_config['torque_space']}/environments/{result.environment_id}"
+        
         if result.status == "completed" and result.exit_code == 0:
             output_text = f"""Contents of `{directory_path}` on {target_ip}:
 
 ```
 {result.command_output}
-```"""
+```
+
+**Environment:** [{result.environment_id}]({env_url})"""
         elif result.status == "completed":
             output_text = f"""Failed to list directory `{directory_path}` on {target_ip}
 
 **Exit Code:** {result.exit_code}
-**Output:** {result.command_output}"""
+**Output:** {result.command_output}
+
+**Environment:** [{result.environment_id}]({env_url})"""
         else:
             output_text = f"""Failed to list directory on {target_ip}
 
 **Status:** {result.status}
-**Error:** {result.error}"""
+**Error:** {result.error}
+
+**Environment:** [{result.environment_id}]({env_url})"""
         
         return [TextContent(type="text", text=output_text)]
     
@@ -514,6 +541,12 @@ Example:
         default=os.environ.get("FINALLY_COMMANDS"),
         help="Commands to run after every SSH command (cleanup). Always runs even on failure.",
     )
+    parser.add_argument(
+        "--auto-delete-environments",
+        action="store_true",
+        default=os.environ.get("AUTO_DELETE_ENVIRONMENTS", "").lower() in ("true", "1", "yes"),
+        help="Automatically delete Torque environments after command completion (default: keep environments)",
+    )
     
     args = parser.parse_args()
     
@@ -527,6 +560,10 @@ Example:
     _config["default_ssh_user"] = args.default_ssh_user
     _config["init_commands"] = args.init_commands
     _config["finally_commands"] = args.finally_commands
+    _config["auto_delete_environments"] = args.auto_delete_environments
+    
+    # Debug: Print config at startup
+    print(f"[DEBUG] auto_delete_environments = {_config['auto_delete_environments']}", file=sys.stderr, flush=True)
     
     # Validate required config
     missing = []
