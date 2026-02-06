@@ -59,6 +59,7 @@ grains:
                 if [ -s "$FINALLY_FILE" ]; then
                   echo '__finally() {' >> "$COMBINED"
                   cat "$FINALLY_FILE" >> "$COMBINED"
+                  echo '' >> "$COMBINED"
                   echo '}' >> "$COMBINED"
                   echo 'trap __finally EXIT' >> "$COMBINED"
                 fi
@@ -67,10 +68,12 @@ grains:
                 if [ -s "$INIT_FILE" ]; then
                   echo "=== Running init commands ==="
                   cat "$INIT_FILE" >> "$COMBINED"
+                  echo '' >> "$COMBINED"
                 fi
                 
                 # Add main command
                 cat "$SCRIPT_FILE" >> "$COMBINED"
+                echo '' >> "$COMBINED"
                 
                 chmod +x "$COMBINED"
                 

@@ -75,6 +75,7 @@ grains:
                 if [ -s "$FINALLY_FILE" ]; then
                   echo '__finally() {' >> "$REMOTE_SCRIPT"
                   cat "$FINALLY_FILE" >> "$REMOTE_SCRIPT"
+                  echo '' >> "$REMOTE_SCRIPT"
                   echo '}' >> "$REMOTE_SCRIPT"
                   echo 'trap __finally EXIT' >> "$REMOTE_SCRIPT"
                 fi
@@ -82,10 +83,12 @@ grains:
                 # Add init commands if provided
                 if [ -s "$INIT_FILE" ]; then
                   cat "$INIT_FILE" >> "$REMOTE_SCRIPT"
+                  echo '' >> "$REMOTE_SCRIPT"
                 fi
                 
                 # Add main command
                 cat "$CMD_FILE" >> "$REMOTE_SCRIPT"
+                echo '' >> "$REMOTE_SCRIPT"
                 
                 echo "=== Connecting to {{ .inputs.ssh_user }}@{{ .inputs.target_ip }} ==="
                 echo "=== Output (streaming) ========================================================================================================================="
