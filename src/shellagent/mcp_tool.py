@@ -5,6 +5,7 @@ This MCP tool provides Copilot with the ability to run commands on remote server
 by leveraging Torque's Shell Grain infrastructure.
 """
 
+import base64
 import os
 import sys
 import asyncio
@@ -279,6 +280,65 @@ Default timeout is 30 minutes. For longer commands, use the `timeout` parameter.
                 "required": ["command"],
             },
         ),
+        Tool(
+            name="write_remote_file",
+            description="""Write content to a file on a remote server.
+
+This tool transfers file content to a remote server via SSH. It can:
+- Write content directly provided as a string
+- Copy a local file to the remote server
+
+The content is base64-encoded for transfer, so it works with both text and binary files.
+
+**Use cases:**
+- Upload configuration files
+- Transfer scripts to execute remotely
+- Copy any file from local machine to remote server
+
+**Note:** For very large files (>10MB), consider using other transfer methods like scp or rsync.""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "target_ip": {
+                        "type": "string",
+                        "description": "The IP address or hostname of the remote server",
+                    },
+                    "ssh_user": {
+                        "type": "string",
+                        "description": "The SSH username for authentication",
+                    },
+                    "ssh_private_key": {
+                        "type": "string",
+                        "description": "The path to the SSH private key file for authentication (e.g., C:\\path\\to\\key.pem)",
+                    },
+                    "remote_path": {
+                        "type": "string",
+                        "description": "The destination path on the remote server where the file will be written",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "The content to write to the file. Either provide this OR local_path, not both.",
+                    },
+                    "local_path": {
+                        "type": "string",
+                        "description": "Path to a local file to upload. Either provide this OR content, not both.",
+                    },
+                    "mode": {
+                        "type": "string",
+                        "description": "Optional: File permissions in octal (e.g., '755' for executable, '644' for regular file). Default is '644'.",
+                    },
+                    "create_dirs": {
+                        "type": "boolean",
+                        "description": "Optional: Create parent directories if they don't exist. Default is true.",
+                    },
+                    "agent": {
+                        "type": "string",
+                        "description": "Optional: The Torque agent name to use",
+                    },
+                },
+                "required": ["remote_path"],
+            },
+        ),
     ]
 
 
@@ -297,6 +357,9 @@ async def call_tool(name: str, arguments: dict):
     
     elif name == "run_on_agent":
         return await handle_run_on_agent(arguments)
+    
+    elif name == "write_remote_file":
+        return await handle_write_remote_file(arguments)
     
     else:
         return [TextContent(type="text", text=f"Unknown tool: {name}")]
@@ -580,6 +643,124 @@ async def handle_run_on_agent(arguments: dict):
     
     except Exception as e:
         return [TextContent(type="text", text=f"Error executing command on agent: {str(e)}")]
+
+
+async def handle_write_remote_file(arguments: dict):
+    """Write content to a file on a remote server."""
+    target_ip = arguments.get("target_ip") or _config["default_target_ip"]
+    ssh_user = arguments.get("ssh_user") or _config["default_ssh_user"]
+    ssh_private_key_path = arguments.get("ssh_private_key") or _config["default_ssh_key"]
+    remote_path = arguments.get("remote_path")
+    content = arguments.get("content")
+    local_path = arguments.get("local_path")
+    mode = arguments.get("mode", "644")
+    create_dirs = arguments.get("create_dirs", True)
+    agent = arguments.get("agent")
+    
+    if not all([target_ip, ssh_user, ssh_private_key_path, remote_path]):
+        return [TextContent(
+            type="text",
+            text="Error: Missing required parameters. Need target_ip, ssh_user, ssh_private_key, and remote_path (or configure defaults).",
+        )]
+    
+    # Must have either content or local_path
+    if not content and not local_path:
+        return [TextContent(
+            type="text",
+            text="Error: Must provide either 'content' or 'local_path' parameter.",
+        )]
+    
+    if content and local_path:
+        return [TextContent(
+            type="text",
+            text="Error: Provide either 'content' OR 'local_path', not both.",
+        )]
+    
+    try:
+        ssh_private_key = read_ssh_key_file(ssh_private_key_path)
+    except FileNotFoundError as e:
+        return [TextContent(type="text", text=f"Error: {str(e)}")]
+    
+    # Get content from local file if local_path is provided
+    if local_path:
+        expanded_path = os.path.expanduser(local_path)
+        if not os.path.exists(expanded_path):
+            return [TextContent(type="text", text=f"Error: Local file not found: {local_path}")]
+        
+        try:
+            with open(expanded_path, 'rb') as f:
+                file_bytes = f.read()
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error reading local file: {str(e)}")]
+    else:
+        # Content provided directly - encode as UTF-8
+        file_bytes = content.encode('utf-8')
+    
+    # Base64 encode the content
+    content_b64 = base64.b64encode(file_bytes).decode('ascii')
+    
+    # Build the command to write the file on the remote server
+    # Create parent directories if requested
+    dir_cmd = ""
+    if create_dirs:
+        remote_dir = os.path.dirname(remote_path)
+        if remote_dir:
+            dir_cmd = f"mkdir -p '{remote_dir}' && "
+    
+    # Use echo with base64 -d to write the file, then set permissions
+    command = f"{dir_cmd}echo '{content_b64}' | base64 -d > '{remote_path}' && chmod {mode} '{remote_path}' && echo 'File written successfully' && ls -la '{remote_path}'"
+    
+    try:
+        async with get_torque_client() as client:
+            result = await client.execute_remote_command(
+                target_ip=target_ip,
+                ssh_user=ssh_user,
+                ssh_private_key=ssh_private_key,
+                command=command,
+                agent=agent,
+                auto_cleanup=_config["auto_delete_environments"],
+            )
+        
+        # Build environment URL for reference
+        env_url = f"{_config['torque_url']}/{_config['torque_space']}/environments/{result.environment_id}"
+        
+        file_size = len(file_bytes)
+        source_info = f"local file `{local_path}`" if local_path else "provided content"
+        
+        if result.status == "completed" and result.exit_code == 0:
+            output_text = f"""File written successfully to {target_ip}
+
+**Remote Path:** `{remote_path}`
+**Source:** {source_info}
+**Size:** {file_size} bytes
+**Mode:** {mode}
+
+**Output:**
+```
+{result.command_output}
+```
+
+**Environment:** [{result.environment_id}]( {env_url} )"""
+        elif result.status == "completed":
+            output_text = f"""Failed to write file to {target_ip}
+
+**Remote Path:** `{remote_path}`
+**Exit Code:** {result.exit_code}
+**Output:** {result.command_output}
+
+**Environment:** [{result.environment_id}]( {env_url} )"""
+        else:
+            output_text = f"""Failed to write file to {target_ip}
+
+**Status:** {result.status}
+**Error:** {result.error}
+
+**Environment:** [{result.environment_id}]( {env_url} )"""
+        
+        return [TextContent(type="text", text=output_text)]
+    
+    except Exception as e:
+        return [TextContent(type="text", text=f"Error writing remote file: {str(e)}")]
 
 
 def main():
