@@ -215,19 +215,32 @@ class TorqueClient:
         response.raise_for_status()
         return response.json()
     
-    async def end_environment(self, environment_id: str) -> None:
+    async def end_environment(self, environment_id: str, force: bool = False) -> None:
         """
         End/terminate a running environment (stops execution but keeps it in the system).
         
         Args:
             environment_id: Environment ID
+            force: Whether to force termination (for environments in transitional state)
         """
-        response = await self._client.delete(
-            f"/spaces/{self.space}/environments/{environment_id}"
-        )
+        # Build URL with optional force parameter
+        url = f"/spaces/{self.space}/environments/{environment_id}"
+        if force:
+            url += "?force=true"
+        
+        response = await self._client.delete(url)
+        
         # 404 is ok - environment may have already ended
-        if response.status_code != 404:
-            response.raise_for_status()
+        if response.status_code == 404:
+            return
+        
+        # 409 Conflict - environment is in a transitional state (Launching/Deploying)
+        # Log warning but don't raise - environment will eventually time out on Torque's side
+        if response.status_code == 409:
+            print(f"[WARNING] Could not terminate environment {environment_id} (409 Conflict - in transitional state)", file=sys.stderr)
+            return
+        
+        response.raise_for_status()
     
     async def delete_environment(self, environment_id: str) -> None:
         """
@@ -540,13 +553,16 @@ class TorqueClient:
             finally_commands=finally_commands,
         )
         
+        result = None
         try:
             result = await self.wait_for_environment(environment_id, timeout=timeout, log_callback=log_callback)
             return result
         finally:
             # Always end the environment (terminate it)
+            # Use force=True if we timed out (environment may still be in transitional state)
+            force_terminate = result is not None and result.status == "timeout"
             try:
-                await self.end_environment(environment_id)
+                await self.end_environment(environment_id, force=force_terminate)
             except Exception as e:
                 print(f"[WARNING] Failed to end environment {environment_id}: {e}", file=sys.stderr)
             
@@ -586,13 +602,16 @@ class TorqueClient:
             agent=agent,
         )
         
+        result = None
         try:
             result = await self.wait_for_environment(environment_id, timeout=timeout, log_callback=log_callback)
             return result
         finally:
             # Always end the environment (terminate it)
+            # Use force=True if we timed out (environment may still be in transitional state)
+            force_terminate = result is not None and result.status == "timeout"
             try:
-                await self.end_environment(environment_id)
+                await self.end_environment(environment_id, force=force_terminate)
             except Exception as e:
                 print(f"[WARNING] Failed to end environment {environment_id}: {e}", file=sys.stderr)
             

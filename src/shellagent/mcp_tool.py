@@ -1009,6 +1009,7 @@ async def cli_dispatch(args):
             ssh_user = getattr(args, 'user', None) or _config["default_ssh_user"]
             ssh_key_path = getattr(args, 'key', None) or _config["default_ssh_key"]
             agent = getattr(args, 'agent', None)
+            timeout = getattr(args, 'timeout', None)
             max_size = getattr(args, 'max_size', 102400)
             
             if not all([target_ip, ssh_user, ssh_key_path]):
@@ -1028,6 +1029,7 @@ async def cli_dispatch(args):
                     ssh_private_key=ssh_key,
                     command=cmd,
                     agent=agent,
+                    timeout=timeout,
                     auto_cleanup=_config["auto_delete_environments"],
                 )
             
@@ -1044,6 +1046,7 @@ async def cli_dispatch(args):
             ssh_user = getattr(args, 'user', None) or _config["default_ssh_user"]
             ssh_key_path = getattr(args, 'key', None) or _config["default_ssh_key"]
             agent = getattr(args, 'agent', None)
+            timeout = getattr(args, 'timeout', None)
             show_all = getattr(args, 'all', False)
             long_format = getattr(args, 'long', False)
             
@@ -1071,6 +1074,7 @@ async def cli_dispatch(args):
                     ssh_private_key=ssh_key,
                     command=cmd,
                     agent=agent,
+                    timeout=timeout,
                     auto_cleanup=_config["auto_delete_environments"],
                 )
             
@@ -1087,6 +1091,7 @@ async def cli_dispatch(args):
             ssh_user = getattr(args, 'user', None) or _config["default_ssh_user"]
             ssh_key_path = getattr(args, 'key', None) or _config["default_ssh_key"]
             agent = getattr(args, 'agent', None)
+            timeout = getattr(args, 'timeout', None)
             mode = getattr(args, 'mode', None)
             backup = getattr(args, 'backup', False)
             use_stdin = getattr(args, 'stdin', False)
@@ -1143,6 +1148,7 @@ async def cli_dispatch(args):
                     ssh_private_key=ssh_key,
                     command=cmd,
                     agent=agent,
+                    timeout=timeout,
                     auto_cleanup=_config["auto_delete_environments"],
                 )
             
@@ -1310,6 +1316,7 @@ PERFORMANCE TIP:
     read_parser.add_argument("--user", "-u", help="SSH username")
     read_parser.add_argument("--key", "-k", help="SSH private key file")
     read_parser.add_argument("--agent", "-a", help="Torque agent name")
+    read_parser.add_argument("--timeout", type=int, help="Timeout in seconds")
     read_parser.add_argument("--max-size", type=int, default=102400, help="Max file size in bytes (default: 100KB)")
     
     # list subcommand
@@ -1318,6 +1325,7 @@ PERFORMANCE TIP:
     list_parser.add_argument("--user", "-u", help="SSH username")
     list_parser.add_argument("--key", "-k", help="SSH private key file")
     list_parser.add_argument("--agent", "-a", help="Torque agent name")
+    list_parser.add_argument("--timeout", type=int, help="Timeout in seconds")
     list_parser.add_argument("--all", "-A", action="store_true", help="Show hidden files")
     list_parser.add_argument("--long", "-l", action="store_true", help="Long format with details")
     
@@ -1330,6 +1338,7 @@ PERFORMANCE TIP:
     write_parser.add_argument("--user", "-u", help="SSH username")
     write_parser.add_argument("--key", "-k", help="SSH private key file")
     write_parser.add_argument("--agent", "-a", help="Torque agent name")
+    write_parser.add_argument("--timeout", type=int, help="Timeout in seconds")
     write_parser.add_argument("--mode", help="File permissions (e.g., 0644)")
     write_parser.add_argument("--backup", action="store_true", help="Create backup before overwriting")
     
