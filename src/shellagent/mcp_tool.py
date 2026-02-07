@@ -182,7 +182,14 @@ The tool will return the command output and exit code.
 Default timeout is 30 minutes. For longer commands, use the `timeout` parameter.
 Note: Output is only available after command completes (no streaming).
 For very long operations, consider running in background: `nohup command > /tmp/output.log 2>&1 &`
-Then check status with: `cat /tmp/output.log`""",
+Then check status with: `cat /tmp/output.log`
+
+**PERFORMANCE TIP:**
+Each command invocation has significant roundtrip overhead (environment provisioning, SSH connection, etc.).
+Consolidate multiple commands into a single invocation when possible using shell operators:
+- Use `;` to run commands sequentially: `cmd1; cmd2; cmd3`
+- Use `&&` to stop on first failure: `cmd1 && cmd2 && cmd3`
+- Use subshells or scripts for complex logic""",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -325,7 +332,14 @@ No SSH credentials or target IP required - useful when you need to:
 Note: Each command spawns a fresh runner container via the Torque agent.
 
 **LONG-RUNNING COMMANDS:**
-Default timeout is 30 minutes. For longer commands, use the `timeout` parameter.""",
+Default timeout is 30 minutes. For longer commands, use the `timeout` parameter.
+
+**PERFORMANCE TIP:**
+Each command invocation has significant roundtrip overhead (environment provisioning, container startup, etc.).
+Consolidate multiple commands into a single invocation when possible using shell operators:
+- Use `;` to run commands sequentially: `cmd1; cmd2; cmd3`
+- Use `&&` to stop on first failure: `cmd1 && cmd2 && cmd3`
+- Use subshells or scripts for complex logic""",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -1238,10 +1252,33 @@ Examples:
   shellagent read /etc/hostname
   shellagent list /var/log
   shellagent write /tmp/test.txt "Hello World"
+  shellagent write /tmp/config.yaml --file ./local-config.yaml
+  echo "content" | shellagent write /tmp/from-stdin.txt --stdin
 
 Environment Variables:
   TORQUE_URL, TORQUE_TOKEN, TORQUE_SPACE, TORQUE_AGENT
   SSH_KEY, TARGET_HOST, SSH_USER
+
+DANGEROUS COMMANDS (will kill the Torque agent):
+  docker restart, docker stop, docker kill, docker rm
+  systemctl restart docker, systemctl stop docker
+  service docker restart, service docker stop
+  reboot, shutdown, init 0, init 6, poweroff, halt
+  Use --force to bypass (NOT RECOMMENDED), or run manually via SSH.
+
+LONG-RUNNING COMMANDS:
+  Default timeout is 30 minutes. Use --timeout to extend.
+  For very long operations, run in background:
+    shellagent run "nohup command > /tmp/output.log 2>&1 &"
+  Then check status:
+    shellagent run "cat /tmp/output.log"
+
+PERFORMANCE TIP:
+  Each command invocation has significant roundtrip overhead
+  (environment provisioning, SSH connection, etc.).
+  Consolidate multiple commands into a single invocation:
+    shellagent run "cmd1; cmd2; cmd3"           # sequential
+    shellagent run "cmd1 && cmd2 && cmd3"       # stop on failure
         """,
     )
     
