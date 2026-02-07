@@ -214,6 +214,30 @@ Then check status with: `cat /tmp/output.log`""",
                         "type": "integer",
                         "description": "Optional: Maximum time to wait for command completion in seconds. Default is 1800 (30 minutes). For long operations, increase this or run command in background.",
                     },
+                    "init_commands": {
+                        "type": "string",
+                        "description": "Optional: Commands to run before the main command. Any failure here will prevent main command execution but finally_commands will still run.",
+                    },
+                    "finally_commands": {
+                        "type": "string",
+                        "description": "Optional: Commands to run after the main command completes (cleanup). Runs even if main command fails.",
+                    },
+                    "auto_delete": {
+                        "type": "boolean",
+                        "description": "Optional: Whether to automatically delete the Torque environment after completion. Overrides global setting.",
+                    },
+                    "torque_token": {
+                        "type": "string",
+                        "description": "Optional: Torque API token. Overrides global config.",
+                    },
+                    "torque_url": {
+                        "type": "string",
+                        "description": "Optional: Torque platform URL. Overrides global config.",
+                    },
+                    "torque_space": {
+                        "type": "string",
+                        "description": "Optional: Torque space name. Overrides global config.",
+                    },
                 },
                 "required": ["command"],
             },
@@ -415,11 +439,28 @@ async def handle_run_remote_command(arguments: dict):
     agent = arguments.get("agent")
     force = arguments.get("force", False)
     timeout = arguments.get("timeout")  # Optional timeout override
+    init_commands = arguments.get("init_commands")  # Per-call init commands
+    finally_commands = arguments.get("finally_commands")  # Per-call finally commands
+    # Per-call auto_delete overrides global config if specified
+    auto_delete = arguments.get("auto_delete")
+    if auto_delete is None:
+        auto_delete = _config["auto_delete_environments"]
+    
+    # Per-call Torque config overrides
+    torque_url = arguments.get("torque_url") or _config["torque_url"]
+    torque_token = arguments.get("torque_token") or _config["torque_token"]
+    torque_space = arguments.get("torque_space") or _config["torque_space"]
     
     if not all([target_ip, ssh_user, ssh_private_key_path, command]):
         return [TextContent(
             type="text",
             text="Error: Missing required parameters. Need target_ip, ssh_user, ssh_private_key, and command (or configure defaults).",
+        )]
+    
+    if not all([torque_url, torque_token, torque_space]):
+        return [TextContent(
+            type="text",
+            text="Error: Torque configuration missing. Need torque_url, torque_token, and torque_space (or configure defaults).",
         )]
     
     # Check for dangerous commands unless force=true
@@ -442,7 +483,16 @@ async def handle_run_remote_command(arguments: dict):
         pass  # Streaming not available
     
     try:
-        async with get_torque_client() as client:
+        # Create client with per-call or global config
+        client = TorqueClient(
+            base_url=torque_url,
+            token=torque_token,
+            space=torque_space,
+            default_agent=_config["default_agent"],
+            init_commands=_config["init_commands"],
+            finally_commands=_config["finally_commands"],
+        )
+        async with client:
             result = await client.execute_remote_command(
                 target_ip=target_ip,
                 ssh_user=ssh_user,
@@ -450,8 +500,10 @@ async def handle_run_remote_command(arguments: dict):
                 command=command,
                 agent=agent,
                 timeout=timeout,
-                auto_cleanup=_config["auto_delete_environments"],
+                auto_cleanup=auto_delete,
                 log_callback=log_callback,
+                init_commands=init_commands,
+                finally_commands=finally_commands,
             )
             
             # Try to get grain log for additional context (especially useful on failures)
@@ -462,7 +514,7 @@ async def handle_run_remote_command(arguments: dict):
                 pass
         
         # Build environment URL for reference
-        env_url = f"{_config['torque_url']}/{_config['torque_space']}/environments/{result.environment_id}"
+        env_url = f"{torque_url}/{torque_space}/environments/{result.environment_id}"
         
         if result.status == "completed":
             output_block = format_code_block(result.command_output)

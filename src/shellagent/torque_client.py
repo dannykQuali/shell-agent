@@ -88,6 +88,8 @@ class TorqueClient:
         command: str,
         agent: Optional[str] = None,
         environment_name: Optional[str] = None,
+        init_commands: Optional[str] = None,
+        finally_commands: Optional[str] = None,
     ) -> str:
         """
         Start a new environment to execute remote command.
@@ -99,6 +101,8 @@ class TorqueClient:
             command: Command to execute
             agent: Agent name (uses default if not specified)
             environment_name: Optional name for the environment
+            init_commands: Optional commands to run before main command (overrides instance default)
+            finally_commands: Optional cleanup commands (overrides instance default)
             
         Returns:
             Environment ID
@@ -111,6 +115,10 @@ class TorqueClient:
         if not environment_name:
             environment_name = f"shell-cmd-{int(time.time())}"
         
+        # Use per-call values if provided, otherwise fall back to instance defaults
+        effective_init = init_commands if init_commands is not None else self.init_commands
+        effective_finally = finally_commands if finally_commands is not None else self.finally_commands
+        
         inputs = {
             "agent": agent_name,
             "target_ip": target_ip,
@@ -119,10 +127,10 @@ class TorqueClient:
             "command_b64": base64.b64encode(command.encode()).decode(),
         }
         # Only include optional inputs if they have values
-        if self.init_commands:
-            inputs["init_commands_b64"] = base64.b64encode(self.init_commands.encode()).decode()
-        if self.finally_commands:
-            inputs["finally_commands_b64"] = base64.b64encode(self.finally_commands.encode()).decode()
+        if effective_init:
+            inputs["init_commands_b64"] = base64.b64encode(effective_init.encode()).decode()
+        if effective_finally:
+            inputs["finally_commands_b64"] = base64.b64encode(effective_finally.encode()).decode()
         
         payload = {
             "blueprint_name": self.BLUEPRINT_NAME,
@@ -495,6 +503,8 @@ class TorqueClient:
         auto_cleanup: bool = True,
         timeout: Optional[int] = None,
         log_callback: Optional[Callable[[str], Awaitable[None]]] = None,
+        init_commands: Optional[str] = None,
+        finally_commands: Optional[str] = None,
     ) -> EnvironmentResult:
         """
         Execute a remote command and wait for result.
@@ -514,6 +524,8 @@ class TorqueClient:
             auto_cleanup: Whether to automatically end the environment after completion
             timeout: Optional timeout override in seconds
             log_callback: Optional async callback for streaming log updates
+            init_commands: Optional commands to run before main command (overrides instance default)
+            finally_commands: Optional cleanup commands (overrides instance default)
             
         Returns:
             EnvironmentResult with command output
@@ -524,6 +536,8 @@ class TorqueClient:
             ssh_private_key=ssh_private_key,
             command=command,
             agent=agent,
+            init_commands=init_commands,
+            finally_commands=finally_commands,
         )
         
         try:
