@@ -66,13 +66,14 @@ grains:
                   echo 'trap __finally EXIT' >> "$COMBINED"
                 fi
                 
-                # Add init commands if provided - wrapped with </dev/null to prevent stdin reads
+                # Add init commands if provided - use curly braces (not subshell) so exports persist
+                # Redirect stdin to /dev/null to prevent interactive prompts
                 if [ -s "$INIT_FILE" ]; then
                   echo "=== Running init commands ==="
-                  echo '(' >> "$COMBINED"
+                  echo '{' >> "$COMBINED"
                   cat "$INIT_FILE" >> "$COMBINED"
                   echo '' >> "$COMBINED"
-                  echo ') </dev/null' >> "$COMBINED"
+                  echo '} </dev/null' >> "$COMBINED"
                 fi
                 
                 # Add main command - wrapped with </dev/null to prevent stdin reads
