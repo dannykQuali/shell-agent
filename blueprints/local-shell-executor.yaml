@@ -39,7 +39,32 @@ grains:
               command: |
                 echo "=== Beginning of local execution ============================================================================================================="
                 
+                # Initialize variables for trap
                 OUTPUT_FILE=$(mktemp)
+                CMD_EXIT_CODE=1
+                
+                # Trap to ensure outputs are always exported, even on script failure
+                __export_outputs() {
+                  local trap_exit_code=$?
+                  # Use CMD_EXIT_CODE if set, otherwise use the trap's exit code
+                  local final_exit_code=${CMD_EXIT_CODE:-$trap_exit_code}
+                  
+                  # Export whatever output we captured (empty string if file doesn't exist or is empty)
+                  if [ -f "$OUTPUT_FILE" ]; then
+                    export command_output=$(base64 < "$OUTPUT_FILE" | tr -d '\n')
+                  else
+                    export command_output=""
+                  fi
+                  export exit_code="$final_exit_code"
+                  
+                  # Cleanup temp files
+                  rm -f "$OUTPUT_FILE" "$SCRIPT_FILE" "$INIT_FILE" "$FINALLY_FILE" "$COMBINED" 2>/dev/null || true
+                  
+                  echo ""
+                  echo "=== Command completed with exit code: $final_exit_code ==="
+                }
+                trap __export_outputs EXIT
+                
                 SCRIPT_FILE=$(mktemp)
                 
                 # Decode base64 inputs directly to files
@@ -91,17 +116,7 @@ grains:
                 set +e
                 bash "$COMBINED" 2>&1 | tee "$OUTPUT_FILE"
                 CMD_EXIT_CODE=${PIPESTATUS[0]}
-                set -e
-                
-                # Base64 encode output to safely pass special characters
-                COMMAND_OUTPUT_B64=$(base64 < "$OUTPUT_FILE" | tr -d '\n')
-                rm -f "$OUTPUT_FILE" "$SCRIPT_FILE" "$INIT_FILE" "$FINALLY_FILE" "$COMBINED"
-                
-                export command_output="$COMMAND_OUTPUT_B64"
-                export exit_code="$CMD_EXIT_CODE"
-                
-                echo ""
-                echo "=== Command completed with exit code: $CMD_EXIT_CODE ==="
+                # Trap will handle export and cleanup on exit
               outputs:
                 - command_output
                 - exit_code

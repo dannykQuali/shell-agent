@@ -48,6 +48,33 @@ grains:
             - name: run_ssh
               command: |
                 echo "=== Beginning of execution ====================================================================================================================="
+                
+                # Initialize variables for trap
+                OUTPUT_FILE=$(mktemp)
+                SSH_EXIT_CODE=1
+                
+                # Trap to ensure outputs are always exported, even on script failure
+                __export_outputs() {
+                  local trap_exit_code=$?
+                  # Use SSH_EXIT_CODE if set, otherwise use the trap's exit code
+                  local final_exit_code=${SSH_EXIT_CODE:-$trap_exit_code}
+                  
+                  # Export whatever output we captured (empty string if file doesn't exist or is empty)
+                  if [ -f "$OUTPUT_FILE" ]; then
+                    export command_output=$(base64 < "$OUTPUT_FILE" | tr -d '\n')
+                  else
+                    export command_output=""
+                  fi
+                  export exit_code="$final_exit_code"
+                  
+                  # Cleanup temp files
+                  rm -f "$KEY_FILE" "$OUTPUT_FILE" "$REMOTE_SCRIPT" "$CMD_FILE" "$INIT_FILE" "$FINALLY_FILE" 2>/dev/null || true
+                  
+                  echo ""
+                  echo "=== Command completed with exit code: $final_exit_code ==="
+                }
+                trap __export_outputs EXIT
+                
                 # Save the private key to temp file
                 KEY_FILE=$(mktemp)
                 cat << 'KEYEOF' > "$KEY_FILE"
@@ -55,7 +82,6 @@ grains:
                 KEYEOF
                 chmod 600 "$KEY_FILE"
                 
-                OUTPUT_FILE=$(mktemp)
                 REMOTE_SCRIPT=$(mktemp)
                 
                 # Decode base64 inputs to files
@@ -109,16 +135,7 @@ grains:
                     "{{ .inputs.ssh_user }}@{{ .inputs.target_ip }}" \
                     "bash -s" < "$REMOTE_SCRIPT" 2>&1 | tee "$OUTPUT_FILE"
                 SSH_EXIT_CODE=${PIPESTATUS[0]}
-                set -e
-                
-                COMMAND_OUTPUT_B64=$(base64 < "$OUTPUT_FILE" | tr -d '\n')
-                rm -f "$KEY_FILE" "$OUTPUT_FILE" "$REMOTE_SCRIPT" "$CMD_FILE" "$INIT_FILE" "$FINALLY_FILE"
-                
-                export command_output="$COMMAND_OUTPUT_B64"
-                export exit_code="$SSH_EXIT_CODE"
-                
-                echo ""
-                echo "=== Command completed with exit code: $SSH_EXIT_CODE ==="
+                # Trap will handle export and cleanup on exit
               outputs:
                 - command_output
                 - exit_code
