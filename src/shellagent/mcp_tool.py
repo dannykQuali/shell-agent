@@ -1005,25 +1005,43 @@ async def cli_dispatch(args):
             mode = getattr(args, 'mode', None)
             backup = getattr(args, 'backup', False)
             use_stdin = getattr(args, 'stdin', False)
+            local_file = getattr(args, 'file', None)
             
             if not all([target_ip, ssh_user, ssh_key_path]):
                 print("Error: Missing target, user, or SSH key.", file=sys.stderr)
                 sys.exit(1)
             
-            # Get content
+            # Get content from various sources
             if use_stdin:
                 content = sys.stdin.read()
+            elif local_file:
+                expanded = os.path.expanduser(local_file)
+                if not os.path.exists(expanded):
+                    print(f"Error: Local file not found: {local_file}", file=sys.stderr)
+                    sys.exit(1)
+                with open(expanded, 'rb') as f:
+                    content = f.read()
+                # Handle binary files
+                try:
+                    content = content.decode('utf-8')
+                except UnicodeDecodeError:
+                    # Binary file - keep as bytes, base64 will handle it
+                    pass
             elif args.content:
                 content = args.content
             else:
-                print("Error: No content provided. Use positional argument or --stdin.", file=sys.stderr)
+                print("Error: No content provided. Use positional argument, --stdin, or --file.", file=sys.stderr)
                 sys.exit(1)
             
             ssh_key = read_ssh_key_file(ssh_key_path)
             
             # Build write command
             escaped_path = args.path.replace("'", "'\\''")
-            content_b64 = base64.b64encode(content.encode()).decode()
+            # Handle both string and bytes content
+            if isinstance(content, bytes):
+                content_b64 = base64.b64encode(content).decode()
+            else:
+                content_b64 = base64.b64encode(content.encode()).decode()
             
             cmd_parts = []
             if backup:
@@ -1193,8 +1211,9 @@ Environment Variables:
     # write subcommand
     write_parser = subparsers.add_parser("write", parents=[common_parser], help="Write content to a remote file")
     write_parser.add_argument("path", help="Remote file path to write")
-    write_parser.add_argument("content", nargs="?", help="Content to write (or use --stdin)")
+    write_parser.add_argument("content", nargs="?", help="Content to write (or use --stdin/--file)")
     write_parser.add_argument("--stdin", action="store_true", help="Read content from stdin")
+    write_parser.add_argument("--file", "-f", help="Read content from local file")
     write_parser.add_argument("--user", "-u", help="SSH username")
     write_parser.add_argument("--key", "-k", help="SSH private key file")
     write_parser.add_argument("--agent", "-a", help="Torque agent name")
