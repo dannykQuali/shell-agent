@@ -488,32 +488,32 @@ class TorqueClient:
             await asyncio.sleep(self.poll_interval)
     
     def _extract_outputs(self, env_data: dict) -> dict:
-        """Extract outputs from environment data, handling different API response formats."""
+        """Extract outputs from environment data.
+        
+        Outputs are in details.state.outputs as an array of {name, value} objects.
+        If exit_code is 0, outputs should always be present there.
+        
+        Note: When a command produces no output, Torque may return the unresolved
+        template string instead of an empty value. We detect these specific templates
+        and treat them as empty strings.
+        """
+        # Known unresolved templates that indicate empty output
+        EMPTY_OUTPUT_TEMPLATES = {
+            "{{ .grains.remote_executor.activities.deploy.commands.run_ssh.outputs.command_output }}",
+            "{{ .grains.local_executor.activities.deploy.commands.run_local.outputs.command_output }}",
+        }
+        
         outputs = {}
         
-        # Primary location: details.state.outputs (array of {name, value} objects)
         state_outputs = env_data.get("details", {}).get("state", {}).get("outputs", [])
         if isinstance(state_outputs, list):
             for output_item in state_outputs:
                 if isinstance(output_item, dict) and "name" in output_item:
-                    outputs[output_item["name"]] = output_item.get("value", "")
-        
-        if outputs:
-            return outputs
-        
-        # Fallback: root level outputs dict
-        outputs = env_data.get("outputs", {})
-        if isinstance(outputs, dict) and outputs:
-            return outputs
-        
-        # Fallback: details.definition.outputs
-        details = env_data.get("details", {})
-        definition = details.get("definition", {})
-        def_outputs = definition.get("outputs", [])
-        if isinstance(def_outputs, list):
-            for output_item in def_outputs:
-                if isinstance(output_item, dict) and "name" in output_item:
-                    outputs[output_item["name"]] = output_item.get("value", "")
+                    value = output_item.get("value", "")
+                    # Detect specific unresolved templates (Torque returns these when output is empty)
+                    if value in EMPTY_OUTPUT_TEMPLATES:
+                        value = ""  # Treat as empty output
+                    outputs[output_item["name"]] = value
         
         return outputs
     
