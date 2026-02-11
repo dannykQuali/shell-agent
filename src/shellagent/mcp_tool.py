@@ -25,18 +25,60 @@ from mcp.types import (
 from .torque_client import TorqueClient
 
 
-def create_log_streamer(session) -> Callable[[str], Awaitable[None]]:
-    """Create a log callback that streams to stderr and MCP client."""
-    async def stream_log(content: str) -> None:
+def create_log_streamer(session) -> Callable[[str, str], Awaitable[None]]:
+    """Create a log callback that streams to stderr and MCP client.
+    
+    By default, filters output to skip Torque preamble and show only:
+    - First line with "Running on" info + environment URL
+    - Command output after the execution marker
+    
+    Use --verbose flag or VERBOSE=true to show full output.
+    """
+    verbose = _config.get('verbose', False)
+    torque_url = _config.get('torque_url', '')
+    torque_space = _config.get('torque_space', '')
+    
+    # State for tracking streaming progress
+    state = {'found': verbose, 'first_line_shown': verbose, 'buffer': ''}
+    # Full marker line - must be at end of line
+    marker = '=== Beginning of execution =====================================================================================================================\n'
+    # Pattern for first line: [HH:MM:SS.mmm] >> Running on container. Storage: . Task Id: XXX
+    first_line_pattern = re.compile(r'^(\[\d{2}:\d{2}:\d{2}\.\d{3}\] >> Running on .+)$', re.MULTILINE)
+    
+    async def stream_log(content: str, environment_id: str = "") -> None:
         try:
-            # Print the actual log content to stderr for visibility in MCP output panel
-            print(content, file=sys.stderr, end='', flush=True)
-            # Also send via MCP logging notification (for future VS Code support)
-            session.send_log_message(
-                level="info",
-                data=content,
-                logger="shellagent.grain_log"
-            )
+            if state['found']:
+                # Already past marker - print everything
+                print(content, file=sys.stderr, end='', flush=True)
+                session.send_log_message(level="info", data=content, logger="shellagent.grain_log")
+                return
+            
+            # Buffer data to handle markers split across chunks
+            state['buffer'] += content
+            
+            # Show first line with environment info if not yet shown
+            if not state['first_line_shown']:
+                match = first_line_pattern.search(state['buffer'])
+                if match:
+                    first_line = match.group(1)
+                    # Build environment URL
+                    env_url = f"{torque_url}/{torque_space}/environments/{environment_id}" if environment_id else ""
+                    env_info = f". {env_url}" if environment_id else ""
+                    output = f"{first_line}{env_info}\n"
+                    print(output, file=sys.stderr, end='', flush=True)
+                    session.send_log_message(level="info", data=output, logger="shellagent.grain_log")
+                    state['first_line_shown'] = True
+            
+            # Look for execution marker
+            idx = state['buffer'].find(marker)
+            if idx != -1:
+                state['found'] = True
+                # Print from after the marker line
+                after_marker = state['buffer'][idx + len(marker):]
+                if after_marker:
+                    print(after_marker, file=sys.stderr, end='', flush=True)
+                    session.send_log_message(level="info", data=after_marker, logger="shellagent.grain_log")
+                state['buffer'] = ''
         except Exception:
             pass  # Ignore streaming errors
     return stream_log
@@ -94,9 +136,9 @@ The command `{command}` contains `{pattern}` which can KILL the Torque agent and
 
 **This command should be run MANUALLY via direct SSH or console access, NOT via this tool.**
 
-If you still want to proceed (NOT RECOMMENDED), call this tool again with the parameter `force=true`.
+If you still want to proceed (NOT RECOMMENDED), call this tool again with the parameter `allow_dangerous_commands=true`.
 
-Reason: The Torque Docker Agent executes commands on the remote server. Restarting Docker or the agent container will terminate the agent mid-execution, causing an unrecoverable error."""
+Reason: The Torque Docker Agent may execute commands on the remote server. Restarting Docker or the agent container will terminate the agent mid-execution, causing an unrecoverable error."""
     return None
 
 
@@ -246,6 +288,7 @@ _config = {
     "init_commands": None,
     "finally_commands": None,
     "auto_delete_environments": False,
+    "verbose": False,
 }
 
 
@@ -295,7 +338,7 @@ Execution order: files are deployed FIRST, then init_commands, then main command
 - Upload a private key, use it for decryption, then clean up (files + command + finally_commands)
 
 **CRITICAL WARNING - DANGEROUS COMMANDS:**
-The following commands will KILL the Torque agent and cause the operation to fail:
+The following commands may KILL the Torque agent and cause the operation to fail:
 - `docker restart`, `docker stop`, `docker kill` (any container operations that affect the agent)
 - `systemctl restart docker` or any Docker daemon restart
 - `reboot`, `shutdown`, `init 6`, `init 0`
@@ -359,7 +402,7 @@ Default timeout is 30 minutes. Use `timeout` parameter for longer operations."""
                         "type": "string",
                         "description": "Optional: The Torque agent name to use. If not specified, uses the default agent.",
                     },
-                    "force": {
+                    "allow_dangerous_commands": {
                         "type": "boolean",
                         "description": "Optional: Set to true to bypass dangerous command warnings. Use with extreme caution.",
                     },
@@ -572,7 +615,7 @@ async def handle_run_on_ssh(arguments: dict):
     command = arguments.get("command")
     files = arguments.get("files", [])
     agent = arguments.get("agent")
-    force = arguments.get("force", False)
+    allow_dangerous_commands = arguments.get("allow_dangerous_commands", False)
     timeout = arguments.get("timeout")  # Optional timeout override
     init_commands = arguments.get("init_commands")  # Per-call init commands
     finally_commands = arguments.get("finally_commands")  # Per-call finally commands
@@ -605,8 +648,8 @@ async def handle_run_on_ssh(arguments: dict):
             text="Error: Torque configuration missing. Need torque_url, torque_token, and torque_space (or configure defaults).",
         )]
     
-    # Check for dangerous commands unless force=true
-    if command and not force:
+    # Check for dangerous commands unless allow_dangerous_commands=true
+    if command and not allow_dangerous_commands:
         warning = check_dangerous_command(command)
         if warning:
             return [TextContent(type="text", text=warning)]
@@ -696,17 +739,24 @@ async def handle_run_on_ssh(arguments: dict):
 **Output:**
 {output_block}
 
-**Environment:** `{result.environment_id}` - {env_url}"""
+**Environment:** {env_url}"""
         else:
             output_text = f"""Command execution failed on {target_ip}
 {files_summary}
 **Status:** {result.status}
 **Error:** {result.error}
 
-**Environment:** `{result.environment_id}` - {env_url}"""
+**Environment:** {env_url}"""
             
+            # Include partial output if available (e.g., on timeout)
+            if result.command_output:
+                partial_block = format_code_block(result.command_output)
+                output_text += f"""
+
+**Partial Output:**
+{partial_block}"""
             # Include grain log on failure for debugging
-            if grain_log:
+            elif grain_log:
                 log_block = format_code_block(grain_log)
                 output_text += f"""
 
@@ -772,21 +822,21 @@ async def handle_read_remote_file(arguments: dict):
 
 {format_code_block(file_content)}
 
-**Environment:** `{result.environment_id}` - {env_url}"""
+**Environment:** {env_url}"""
         elif result.status == "completed":
             output_text = f"""Failed to read file `{file_path}` on {target_ip}
 
 **Exit Code:** {result.exit_code}
 **Output:** {result.command_output}
 
-**Environment:** `{result.environment_id}` - {env_url}"""
+**Environment:** {env_url}"""
         else:
             output_text = f"""Failed to read file on {target_ip}
 
 **Status:** {result.status}
 **Error:** {result.error}
 
-**Environment:** `{result.environment_id}` - {env_url}"""
+**Environment:** {env_url}"""
         
         return [TextContent(type="text", text=output_text)]
     
@@ -833,21 +883,21 @@ async def handle_list_remote_directory(arguments: dict):
 
 {format_code_block(result.command_output)}
 
-**Environment:** `{result.environment_id}` - {env_url}"""
+**Environment:** {env_url}"""
         elif result.status == "completed":
             output_text = f"""Failed to list directory `{directory_path}` on {target_ip}
 
 **Exit Code:** {result.exit_code}
 **Output:** {result.command_output}
 
-**Environment:** `{result.environment_id}` - {env_url}"""
+**Environment:** {env_url}"""
         else:
             output_text = f"""Failed to list directory on {target_ip}
 
 **Status:** {result.status}
 **Error:** {result.error}
 
-**Environment:** `{result.environment_id}` - {env_url}"""
+**Environment:** {env_url}"""
         
         return [TextContent(type="text", text=output_text)]
     
@@ -934,17 +984,24 @@ async def handle_run_on_container(arguments: dict):
 **Output:**
 {output_block}
 
-**Environment:** `{result.environment_id}` - {env_url}"""
+**Environment:** {env_url}"""
         else:
             output_text = f"""Command execution failed on agent `{agent_name}`
 {files_summary}
 **Status:** {result.status}
 **Error:** {result.error}
 
-**Environment:** `{result.environment_id}` - {env_url}"""
+**Environment:** {env_url}"""
             
+            # Include partial output if available (e.g., on timeout)
+            if result.command_output:
+                partial_block = format_code_block(result.command_output)
+                output_text += f"""
+
+**Partial Output:**
+{partial_block}"""
             # Include grain log on failure for debugging
-            if grain_log:
+            elif grain_log:
                 log_block = format_code_block(grain_log)
                 output_text += f"""
 
@@ -961,29 +1018,51 @@ async def cli_dispatch(args):
     """Dispatch CLI commands to appropriate handlers."""
     import json as json_module
     
-    skip_preamble = getattr(args, 'skip_preamble', False)
+    verbose = getattr(args, 'verbose', False)
+    torque_url = _config.get('torque_url', '')
+    torque_space = _config.get('torque_space', '')
     
     def cli_log_callback(content: str):
         """Simple callback that prints to stderr for CLI streaming."""
-        # State for skip_preamble - track whether we've seen the full marker line
-        # The echo statement has a trailing " so it doesn't match - only actual execution does
-        state = {'found': not skip_preamble, 'buffer': ''}
+        # State for tracking streaming progress
+        # - found: whether we've passed the execution marker (verbose=True skips filtering)
+        # - first_line_shown: whether we've printed the "Running on" header line
+        # - buffer: accumulated data for finding markers
+        state = {'found': verbose, 'first_line_shown': verbose, 'buffer': ''}
         # Full marker line (117 chars of '=' after the text) - must be at end of line (no trailing ")
         marker = '=== Beginning of execution =====================================================================================================================\n'
+        # Pattern for first line: [HH:MM:SS.mmm] >> Running on container. Storage: . Task Id: XXX
+        first_line_pattern = re.compile(r'^(\[\d{2}:\d{2}:\d{2}\.\d{3}\] >> Running on .+)$', re.MULTILINE)
         
-        async def _stream(data: str):
-            if not state['found']:
-                # Buffer data to handle marker split across chunks
-                state['buffer'] += data
-                # Look for marker at end of line (followed by newline, not by ")
-                idx = state['buffer'].find(marker)
-                if idx != -1:
-                    state['found'] = True
-                    # Print from the marker line onwards
-                    print(state['buffer'][idx:], file=sys.stderr, end='', flush=True)
-                    state['buffer'] = ''
+        async def _stream(data: str, environment_id: str = ""):
+            if state['found']:
+                # Already past marker - print everything
+                print(data, file=sys.stderr, end='', flush=True)
                 return
-            print(data, file=sys.stderr, end='', flush=True)
+            
+            # Buffer data to handle markers split across chunks
+            state['buffer'] += data
+            
+            # Show first line with environment info if not yet shown
+            if not state['first_line_shown']:
+                match = first_line_pattern.search(state['buffer'])
+                if match:
+                    first_line = match.group(1)
+                    # Build environment URL
+                    env_url = f"{torque_url}/{torque_space}/environments/{environment_id}" if environment_id else ""
+                    env_info = f". {env_url}" if environment_id else ""
+                    print(f"{first_line}{env_info}\n", file=sys.stderr, end='', flush=True)
+                    state['first_line_shown'] = True
+            
+            # Look for execution marker
+            idx = state['buffer'].find(marker)
+            if idx != -1:
+                state['found'] = True
+                # Print from after the marker line
+                after_marker = state['buffer'][idx + len(marker):]
+                if after_marker:
+                    print(after_marker, file=sys.stderr, end='', flush=True)
+                state['buffer'] = ''
         return _stream
     
     # Helper to parse --upload arguments into files list
@@ -1025,7 +1104,7 @@ async def cli_dispatch(args):
             ssh_key_path = getattr(args, 'key', None) or _config["default_ssh_key"]
             agent = getattr(args, 'agent', None)
             timeout = getattr(args, 'timeout', None)
-            force = getattr(args, 'force', False)
+            allow_dangerous_commands = getattr(args, 'allow_dangerous_commands', False)
             output_json = getattr(args, 'json', False)
             uploads = parse_uploads(getattr(args, 'upload', None))
             cmd = getattr(args, 'cmd', None)
@@ -1040,7 +1119,7 @@ async def cli_dispatch(args):
                 sys.exit(1)
             
             # Check dangerous commands
-            if cmd and not force:
+            if cmd and not allow_dangerous_commands:
                 warning = check_dangerous_command(cmd)
                 if warning:
                     print(warning, file=sys.stderr)
@@ -1295,9 +1374,9 @@ def main():
         help="Automatically delete environments after completion",
     )
     common_parser.add_argument(
-        "--skip-preamble", "-q",
+        "--verbose", "-v",
         action="store_true",
-        help="Skip streaming output until '=== Beginning of execution ===' marker",
+        help="Show full output including Torque preamble (default: skip to '=== Beginning of execution ===' marker)",
     )
     
     # Main parser with subcommands - also inherits common args for when no subcommand is given
@@ -1344,12 +1423,12 @@ UPLOAD FORMAT:
   MODE   = optional file permissions (e.g., 755) - default: 644 for files
   Directories are transferred via tar archive.
 
-DANGEROUS COMMANDS (will kill the Torque agent):
+DANGEROUS COMMANDS (may kill the Torque agent):
   docker restart, docker stop, docker kill, docker rm
   systemctl restart docker, systemctl stop docker
   service docker restart, service docker stop
   reboot, shutdown, init 0, init 6, poweroff, halt
-  Use --force to bypass (NOT RECOMMENDED), or run manually via SSH.
+  Use --allow-dangerous-commands to bypass (NOT RECOMMENDED), or run manually via SSH.
 
 LONG-RUNNING COMMANDS:
   Default timeout is 30 minutes. Use --timeout to extend.
@@ -1379,7 +1458,7 @@ PERFORMANCE TIP:
     ssh_parser.add_argument("--key", "-k", help="SSH private key file (overrides --ssh-key)")
     ssh_parser.add_argument("--agent", "-a", help="Torque agent name (overrides default)")
     ssh_parser.add_argument("--timeout", type=int, help="Timeout in seconds")
-    ssh_parser.add_argument("--force", "-f", action="store_true", help="Force dangerous commands")
+    ssh_parser.add_argument("--allow-dangerous-commands", action="store_true", help="Bypass dangerous command warnings (use with extreme caution)")
     ssh_parser.add_argument("--json", "-j", action="store_true", help="Output as JSON")
     ssh_parser.add_argument("--upload", action="append", metavar="LOCAL:REMOTE[:MODE]",
                               help="Upload local file/dir to remote path (can be repeated)")
@@ -1425,6 +1504,7 @@ PERFORMANCE TIP:
     _config["init_commands"] = args.init_commands
     _config["finally_commands"] = args.finally_commands
     _config["auto_delete_environments"] = args.auto_delete_environments
+    _config["verbose"] = args.verbose
     
     # Validate required config
     missing = []

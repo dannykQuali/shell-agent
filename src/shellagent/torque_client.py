@@ -4,6 +4,7 @@ Torque API Client for interacting with Quali Torque REST API.
 
 import asyncio
 import base64
+import re
 import sys
 import time
 from typing import Optional, Callable, Awaitable
@@ -338,7 +339,7 @@ class TorqueClient:
         self,
         environment_id: str,
         timeout: Optional[int] = None,
-        log_callback: Optional[Callable[[str], Awaitable[None]]] = None,
+        log_callback: Optional[Callable[[str, str], Awaitable[None]]] = None,
     ) -> EnvironmentResult:
         """
         Wait for environment to complete and return results.
@@ -346,7 +347,7 @@ class TorqueClient:
         Args:
             environment_id: Environment ID
             timeout: Optional timeout override
-            log_callback: Optional async callback function that receives log updates
+            log_callback: Optional async callback function that receives (log_content, environment_id)
             
         Returns:
             EnvironmentResult with command output
@@ -356,14 +357,31 @@ class TorqueClient:
         last_log_content = ""  # Track actual content to detect rotation
         consecutive_errors = 0  # Track consecutive errors to avoid infinite loops
         max_consecutive_errors = 10  # Give up after this many consecutive errors
+        output_marker = "=== Output (streaming) =========================================================================================================================\n"
+        timestamp_pattern = re.compile(r'^\[\d{2}:\d{2}:\d{2}\.\d{3}\] ', re.MULTILINE)
         
         while True:
             elapsed = time.time() - start_time
             if elapsed > timeout:
+                # Try to get partial output before returning timeout
+                partial_output = ""
+                try:
+                    full_log = await self.get_grain_log(environment_id) or ""
+                    # Extract only the output after the streaming marker
+                    marker_pos = full_log.find(output_marker)
+                    if marker_pos != -1:
+                        partial_output = full_log[marker_pos + len(output_marker):]
+                    else:
+                        partial_output = full_log
+                    # Strip timestamps from each line - format is "[HH:MM:SS.mmm] "
+                    partial_output = timestamp_pattern.sub('', partial_output)
+                except Exception:
+                    pass  # Ignore errors fetching partial output
                 return EnvironmentResult(
                     environment_id=environment_id,
                     status="timeout",
-                    error=f"Environment did not complete within {timeout} seconds",
+                    command_output=partial_output,
+                    error=f"Environment did not complete within {timeout} seconds. The output is partial.",
                 )
             
             try:
@@ -415,13 +433,13 @@ class TorqueClient:
                     if log_content:
                         if not last_log_content:
                             # First fetch - send everything
-                            await log_callback(log_content)
+                            await log_callback(log_content, environment_id)
                             last_log_content = log_content
                         elif log_content.startswith(last_log_content):
                             # Log grew without rotation - send only new part
                             if len(log_content) > len(last_log_content):
                                 new_content = log_content[len(last_log_content):]
-                                await log_callback(new_content)
+                                await log_callback(new_content, environment_id)
                                 last_log_content = log_content
                         else:
                             # Log rotation detected - try to find overlap with last 10 lines
@@ -438,11 +456,11 @@ class TorqueClient:
                                 # Found overlap - continue from after the matched portion
                                 resume_pos = overlap_pos + len(overlap_text)
                                 if resume_pos < len(log_content):
-                                    await log_callback(log_content[resume_pos:])
+                                    await log_callback(log_content[resume_pos:], environment_id)
                             else:
                                 # No overlap found - show rotation marker and full new content
-                                await log_callback("\n... [log rotated] ...\n")
-                                await log_callback(log_content)
+                                await log_callback("\n... [log rotated] ...\n", environment_id)
+                                await log_callback(log_content, environment_id)
                             last_log_content = log_content
                 except Exception:
                     pass  # Ignore log fetch errors
