@@ -111,11 +111,11 @@ grains:
                   echo "=== Executing on agent container ==="
                   echo "=== Output (streaming) ========================================================================================================================="
                   
-                  START_TIME=$(date +%s%3N 2>/dev/null || date +%s)000
+                  START_TIME=$(date +%s%3N 2>/dev/null || echo "$(date +%s)000")
                   # Run the script (commands inside already have </dev/null protection)
                   bash "$COMBINED" 2>&1 | tee "$OUTPUT_FILE"
                   echo "${PIPESTATUS[0]}" > "$EXIT_CODE_FILE"
-                  END_TIME=$(date +%s%3N 2>/dev/null || date +%s)000
+                  END_TIME=$(date +%s%3N 2>/dev/null || echo "$(date +%s)000")
                   EXEC_DURATION_MS=$((END_TIME - START_TIME))
                 }
                 
