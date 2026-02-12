@@ -47,18 +47,19 @@ grains:
                 sed -i 's/#PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
                 sed -i 's/#PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config
                 
-                # Output connection details in a parseable format
-                CONTAINER_IP=$(hostname -I | awk '{print $1}')
-                CONTAINER_ID=$(hostname)
-                PRIVATE_KEY=$(cat /root/.ssh/container_key)
+                # Output connection details with unique SHELLAGENT:: prefix
+                # so the parser can distinguish actual output from the script echo
+                # that Torque prints before execution
+                _SA_IP=$(hostname -I | awk '{print $1}')
+                _SA_ID=$(hostname)
+                _SA_KEY=$(cat /root/.ssh/container_key)
                 
-                echo "=== PERSISTENT_CONTAINER_INFO ==="
-                echo "CONTAINER_IP=${CONTAINER_IP}"
-                echo "CONTAINER_ID=${CONTAINER_ID}"
-                echo "=== PRIVATE_KEY_START ==="
-                echo "${PRIVATE_KEY}"
-                echo "=== PRIVATE_KEY_END ==="
-                echo "=== PERSISTENT_CONTAINER_READY ==="
+                printf 'SHELLAGENT::CONTAINER_IP=%s\n' "$_SA_IP"
+                printf 'SHELLAGENT::CONTAINER_ID=%s\n' "$_SA_ID"
+                printf 'SHELLAGENT::KEY_START\n'
+                printf '%s\n' "$_SA_KEY"
+                printf 'SHELLAGENT::KEY_END\n'
+                printf 'SHELLAGENT::READY\n'
                 
                 export container_ready="true"
                 
