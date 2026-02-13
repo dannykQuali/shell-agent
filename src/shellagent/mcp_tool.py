@@ -1272,7 +1272,7 @@ async def _ensure_persistent_container(
 async def handle_run_on_container(arguments: dict):
     """Execute a command on a persistent Torque agent container via SSH.
     
-    On first call, launches a persistent container with sshd. Subsequent calls
+    On first call, launches a persistent container with dropbear (SSH server). Subsequent calls
     reuse the same container. The command is executed by SSHing from a disposable
     grain container into the persistent container.
     

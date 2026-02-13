@@ -769,7 +769,7 @@ class TorqueClient:
         """
         Start a persistent container with SSH access on the Torque agent.
         
-        The container runs sshd in foreground and stays alive until terminated.
+        The container runs dropbear (lightweight SSH server) in foreground and stays alive until terminated.
         Returns the environment ID. Use get_persistent_container_info() to get
         connection details (IP, private key) from the deploy log.
         
