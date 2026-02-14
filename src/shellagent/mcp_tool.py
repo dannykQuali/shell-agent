@@ -478,11 +478,23 @@ async def list_tools():
     return [
         Tool(
             name="run_on_ssh",
-            description="""Execute a short shell command on a remote server via SSH. This tool BLOCKS until completion.
-Use only for commands expected to finish within ~60 seconds (simple checks, echo, cat, ls, short scripts).
+            description="""Execute a shell command on a remote server via SSH. This tool BLOCKS until completion.
 
-For installations, builds, downloads, service restarts, or ANY command that might take more than a minute,
-use run_on_ssh_async instead - it returns immediately and lets you poll for progress with get_execution_status.
+If you need to see partial output mid-execution (to make decisions or cancel early),
+use run_on_ssh_async instead - it returns immediately and lets you poll for partial output
+with get_execution_status. If you don't need intermediate output, this blocking tool is simpler.
+
+**WHEN TO USE THIS TOOL:**
+Use run_on_ssh (or run_on_ssh_async) whenever you need to execute a command on a REMOTE SERVER.
+This tool handles the SSH connection for you - just provide host, user, private_key, and command.
+Prefer this over manually running `ssh` from a container - it's simpler and more efficient.
+(SSHing from a container is fine when you need extra logic around the SSH call that can't run as
+part of a single SSH session, e.g., installing tools first then using them to connect.)
+
+**SSH private_key parameter accepts BOTH:**
+- A file path on the local machine (e.g., C:\\Users\\you\\.ssh\\id_rsa, /home/user/.ssh/id_rsa)
+- The raw key content directly as a string (starting with '-----BEGIN')
+You do NOT need to save the key to a file first - just pass the key content directly.
 
 This tool connects to a remote server using SSH credentials and can:
 1. Upload files/directories from your local machine to the remote server
@@ -583,22 +595,20 @@ Each invocation has significant roundtrip overhead. Consolidate operations:
         ),
         Tool(
             name="run_on_disposable_container",
-            description="""Execute a short command on a fresh Torque agent container. This tool BLOCKS until completion.
-Use only for commands expected to finish within ~60 seconds.
+            description="""Execute a command on a fresh Torque agent container. This tool BLOCKS until completion.
 
-For long-running commands, use run_on_disposable_container_async instead - it returns immediately
-and lets you poll for progress with get_execution_status.
+If you need to see partial output mid-execution (to make decisions or cancel early),
+use run_on_disposable_container_async instead - it returns immediately and lets you poll
+for partial output with get_execution_status. If you don't need intermediate output,
+this blocking tool is simpler.
 
 This tool runs commands directly on the Torque agent container - NO SSH target needed.
 Unlike run_on_ssh, this doesn't connect to a remote server.
 
-**Key difference from run_on_ssh:**
-- run_on_ssh: SSH to a remote server (needs host, user, private_key)
-- run_on_disposable_container: Runs locally on the Torque agent container (no SSH needed)
-
-**Key difference from run_on_persistent_container:**
-- run_on_persistent_container: Persistent container - state persists across calls
-- run_on_disposable_container: Fresh container every time - nothing persists
+**IMPORTANT - Choosing the right tool:**
+- To run a simple command on a REMOTE SERVER: prefer run_on_ssh instead - it handles SSH for you
+- For one-off commands that don't need state: use THIS tool (disposable) - it's cheaper and faster
+- For multi-step workflows needing state across calls: use run_on_persistent_container
 
 **Use cases:**
 - Run tools/scripts available in the agent environment
@@ -668,6 +678,15 @@ Each invocation spawns a fresh container. Consolidate operations:
             description="""Execute a command on a persistent Torque agent container. This tool BLOCKS until completion.
 The container persists across calls - files, installed packages, and environment variables are preserved.
 
+If you need to see partial output mid-execution (to make decisions or cancel early),
+use run_on_persistent_container_async instead. If you don't need intermediate output,
+this blocking tool is simpler.
+
+**IMPORTANT - Only use persistent containers when you NEED state across multiple calls.**
+Examples: install a tool, then use it later; build something incrementally; maintain a working directory.
+For one-off commands, use run_on_disposable_container instead - it's cheaper and faster.
+To run a simple command on a REMOTE SERVER, prefer run_on_ssh instead - it handles SSH for you.
+
 On the first call, a new container is automatically provisioned (~30-40 seconds one-time setup).
 Subsequent calls reuse the same container with near-zero overhead.
 The container stays alive for a configurable idle timeout (default: 2 hours) after the last command.
@@ -687,21 +706,13 @@ reconnection only works if the container hasn't expired.
 This tool runs commands directly on the Torque agent container - NO SSH target needed.
 Unlike run_on_ssh, this doesn't connect to a remote server.
 
-**Key difference from run_on_ssh:**
-- run_on_ssh: SSH to a remote server (needs host, user, private_key)
-- run_on_persistent_container: Runs locally on the Torque agent container (no SSH needed)
-
-**Use cases:**
-- Run tools/scripts available in the agent environment
-- Test network connectivity from the Torque infrastructure
-- Upload scripts and run them on the agent
-- Build/compile projects in a clean container environment
-- Operations that don't require a specific target machine
+**Use cases (where state across calls matters):**
+- Install a tool once, then run multiple commands using it
+- Build projects incrementally across steps
+- Maintain working directories and environment between commands
 
 **Files parameter:**
 You can upload files/directories to the agent container and then run commands on them.
-This is powerful because files persist for the entire command execution - unlike
-separate invocations which would get different containers.
 
 Execution order: files deployed FIRST, then init_commands, then main command.
 
@@ -767,9 +778,20 @@ Consolidate operations:
             description="""Execute a command on a remote server via SSH WITHOUT waiting for completion.
 Returns immediately with an environment ID. Use get_execution_status to poll for output and progress.
 
-Use this for: package installs (apt/yum/pip), builds, downloads, database migrations,
-config management runs, service deployments, or any command where duration is uncertain.
-This gives you the ability to provide progress updates to the user while waiting.
+Use this when you need to see partial output mid-execution - to learn from logs, make decisions,
+or cancel early. Call get_execution_status repeatedly to read output as it's produced.
+If you don't need intermediate output, use run_on_ssh instead - it's simpler (one call
+instead of multiple).
+
+**WHEN TO USE THIS TOOL:**
+Use run_on_ssh_async whenever you need to execute a long-running command on a REMOTE SERVER.
+This tool handles the SSH connection for you - just provide host, user, private_key, and command.
+Prefer this over manually running `ssh` from a container - it's simpler and more efficient.
+
+**SSH private_key parameter accepts BOTH:**
+- A file path on the local machine (e.g., ~/.ssh/id_rsa)
+- The raw key content directly as a string (starting with '-----BEGIN')
+You do NOT need to save the key to a file first - just pass the key content directly.
 
 Same parameters as run_on_ssh. The command starts executing immediately and you get
 the environment ID back to track progress.
@@ -844,6 +866,16 @@ The following commands may KILL the Torque agent and cause the operation to fail
             name="run_on_persistent_container_async",
             description="""Execute a command on a persistent Torque agent container WITHOUT waiting for completion.
 Returns immediately with an environment ID. Use get_execution_status to poll for output and progress.
+
+Use this when you need to see partial output mid-execution - to learn from logs, make decisions,
+or cancel early. Call get_execution_status repeatedly to read output as it's produced.
+If you don't need intermediate output, use run_on_persistent_container instead - it's simpler
+(one call instead of multiple).
+
+**IMPORTANT - Only use persistent containers when you NEED state across multiple calls.**
+Examples: install a tool, then use it later; build something incrementally; maintain a working directory.
+For one-off commands, use run_on_disposable_container_async instead - it's cheaper and faster.
+To run a simple command on a REMOTE SERVER, prefer run_on_ssh_async instead - it handles SSH for you.
 
 On the first call, a new container is automatically provisioned (~30-40 seconds one-time setup).
 Subsequent calls reuse the same container with near-zero overhead.
@@ -929,8 +961,15 @@ Unlike run_on_ssh_async, this doesn't connect to a remote server.
             description="""Execute a command on a fresh Torque agent container WITHOUT waiting for completion.
 Returns immediately with an environment ID. Use get_execution_status to poll for output and progress.
 
-Use this for long-running operations on the agent container. Same as run_on_disposable_container
-but non-blocking. Track progress with get_execution_status.""",
+Use this when you need to see partial output mid-execution - to learn from logs, make decisions,
+or cancel early. Call get_execution_status repeatedly to read output as it's produced.
+If you don't need intermediate output, use run_on_disposable_container instead - it's simpler
+(one call instead of multiple).
+
+**IMPORTANT - Choosing the right tool:**
+- To run a simple command on a REMOTE SERVER: prefer run_on_ssh_async instead - it handles SSH for you
+- For one-off commands that don't need state: use THIS tool (disposable) - it's cheaper and faster
+- For multi-step workflows needing state across calls: use run_on_persistent_container_async""",
             inputSchema={
                 "type": "object",
                 "properties": {
