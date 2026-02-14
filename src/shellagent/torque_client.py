@@ -93,6 +93,7 @@ class TorqueClient:
         environment_name: Optional[str] = None,
         init_commands: Optional[str] = None,
         finally_commands: Optional[str] = None,
+        timeout: Optional[int] = None,
     ) -> str:
         """
         Start a new environment to execute remote command.
@@ -106,6 +107,7 @@ class TorqueClient:
             environment_name: Optional name for the environment
             init_commands: Optional commands to run before main command (overrides instance default)
             finally_commands: Optional cleanup commands (overrides instance default)
+            timeout: Optional timeout override in seconds (overrides instance default)
             
         Returns:
             Environment ID
@@ -131,7 +133,8 @@ class TorqueClient:
         effective_finally = finally_commands if finally_commands is not None else self.finally_commands
         
         # Calculate timeout in minutes (round up, minimum 5 minutes for Torque)
-        timeout_minutes = max(5, (self.timeout + 59) // 60)
+        effective_timeout = timeout if timeout is not None else self.timeout
+        timeout_minutes = max(5, (effective_timeout + 59) // 60)
         
         inputs = {
             "agent": agent_name,
@@ -169,6 +172,7 @@ class TorqueClient:
         agent: Optional[str] = None,
         environment_name: Optional[str] = None,
         init_commands: Optional[str] = None,
+        timeout: Optional[int] = None,
     ) -> str:
         """
         Start a new environment to execute command locally on the agent container.
@@ -178,6 +182,7 @@ class TorqueClient:
             agent: Agent name (uses default if not specified)
             environment_name: Optional name for the environment
             init_commands: Optional commands to run before the main command (prepended to global init_commands)
+            timeout: Optional timeout override in seconds (overrides instance default)
             
         Returns:
             Environment ID
@@ -201,7 +206,8 @@ class TorqueClient:
             combined_init = self.init_commands
         
         # Calculate timeout in minutes (round up, minimum 5 minutes for Torque)
-        timeout_minutes = max(5, (self.timeout + 59) // 60)
+        effective_timeout = timeout if timeout is not None else self.timeout
+        timeout_minutes = max(5, (effective_timeout + 59) // 60)
         
         inputs = {
             "agent": agent_name,

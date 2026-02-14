@@ -832,6 +832,10 @@ The following commands may KILL the Torque agent and cause the operation to fail
                         "type": "boolean",
                         "description": "Optional: Set to true to bypass dangerous command warnings.",
                     },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "Optional: Maximum time in seconds. Default is 1800 (30 minutes).",
+                    },
                 },
                 "required": ["command"],
             },
@@ -912,6 +916,10 @@ Unlike run_on_ssh_async, this doesn't connect to a remote server.
                         "type": "string",
                         "description": "Target a specific persistent container by its environment ID. If omitted, uses the most recently used container (or creates one).",
                     },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "Optional: Maximum time in seconds. Default is 1800 (30 minutes).",
+                    },
                 },
                 "required": ["command"],
             },
@@ -959,6 +967,10 @@ but non-blocking. Track progress with get_execution_status.""",
                     "agent": {
                         "type": "string",
                         "description": "Optional: The Torque agent name to use.",
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "Optional: Maximum time in seconds. Default is 1800 (30 minutes).",
                     },
                 },
                 "required": ["command"],
@@ -1615,6 +1627,7 @@ async def handle_run_on_ssh_async(arguments: dict):
     files = arguments.get("files", [])
     agent = arguments.get("agent")
     allow_dangerous_commands = arguments.get("allow_dangerous_commands", False)
+    timeout = arguments.get("timeout")
     
     if not command and not files:
         return [TextContent(type="text", text="Error: Must provide either 'command' or 'files' (or both).")]
@@ -1656,6 +1669,7 @@ async def handle_run_on_ssh_async(arguments: dict):
                 command=effective_command,
                 agent=agent,
                 init_commands=init_commands,
+                timeout=timeout,
             )
         
         env_url = f"{_config['torque_url']}/{_config['torque_space']}/environments/{environment_id}"
@@ -1692,6 +1706,7 @@ async def handle_run_on_persistent_container_async(arguments: dict):
     agent = arguments.get("agent")
     new_container = arguments.get("new_container", False)
     target_env_id = arguments.get("environment_id")
+    timeout = arguments.get("timeout")
     
     if not command and not files:
         return [TextContent(type="text", text="Error: Must provide either 'command' or 'files' (or both).")]
@@ -1731,6 +1746,7 @@ async def handle_run_on_persistent_container_async(arguments: dict):
                 command=effective_command,
                 agent=agent,
                 init_commands=init_commands,
+                timeout=timeout,
             )
             
             # Extend the persistent container's idle timeout
@@ -1777,6 +1793,7 @@ async def handle_run_on_disposable_container_async(arguments: dict):
     command = arguments.get("command")
     files = arguments.get("files", [])
     agent = arguments.get("agent")
+    timeout = arguments.get("timeout")
     
     if not command and not files:
         return [TextContent(type="text", text="Error: Must provide either 'command' or 'files' (or both).")]
@@ -1801,6 +1818,7 @@ async def handle_run_on_disposable_container_async(arguments: dict):
                 command=effective_command,
                 agent=agent,
                 init_commands=init_commands,
+                timeout=timeout,
             )
         
         env_url = f"{_config['torque_url']}/{_config['torque_space']}/environments/{environment_id}"
