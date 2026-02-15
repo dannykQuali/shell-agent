@@ -27,6 +27,32 @@ from mcp.types import (
 from .torque_client import TorqueClient
 
 
+# Shared compiled patterns for filtering grain/execution logs.
+# Used by create_log_streamer (MCP streaming), cli_log_callback (CLI streaming),
+# and filter_grain_log (complete-log filtering on failures/timeouts).
+# Marker pattern - matches both "=== Beginning of execution ===" and "=== Beginning of local execution ==="
+# Requires 50+ trailing = chars to avoid false positives from user output
+_EXECUTION_MARKER = re.compile(r'=== Beginning of (?:local )?execution ={50,}\n')
+# Pattern for first line: [HH:MM:SS.mmm] >> Running on container. Storage: . Task Id: XXX
+_FIRST_LINE_PATTERN = re.compile(r'^(\[\d{2}:\d{2}:\d{2}\.\d{3}\] >> Running on .+)$', re.MULTILINE)
+
+
+def filter_grain_log(raw_log: str) -> str:
+    """Filter a complete grain log to strip Torque preamble, keeping only command output.
+    
+    Uses the same execution marker as the streaming filters. Returns everything
+    after the marker, or the full log if no marker is found.
+    """
+    if not raw_log:
+        return raw_log
+    if _config.get('verbose', False):
+        return raw_log
+    match = _EXECUTION_MARKER.search(raw_log)
+    if match:
+        return raw_log[match.end():]
+    return raw_log
+
+
 def create_log_streamer(session) -> Callable[[str, str], Awaitable[None]]:
     """Create a log callback that streams to stderr and MCP client.
     
@@ -42,11 +68,6 @@ def create_log_streamer(session) -> Callable[[str, str], Awaitable[None]]:
     
     # State for tracking streaming progress
     state = {'found': verbose, 'first_line_shown': verbose, 'buffer': ''}
-    # Marker pattern - matches both "=== Beginning of execution ===" and "=== Beginning of local execution ==="
-    # Requires 50+ trailing = chars to avoid false positives from user output
-    marker_pattern = re.compile(r'=== Beginning of (?:local )?execution ={50,}\n')
-    # Pattern for first line: [HH:MM:SS.mmm] >> Running on container. Storage: . Task Id: XXX
-    first_line_pattern = re.compile(r'^(\[\d{2}:\d{2}:\d{2}\.\d{3}\] >> Running on .+)$', re.MULTILINE)
     
     async def stream_log(content: str, environment_id: str = "") -> None:
         try:
@@ -61,7 +82,7 @@ def create_log_streamer(session) -> Callable[[str, str], Awaitable[None]]:
             
             # Show first line with environment info if not yet shown
             if not state['first_line_shown']:
-                match = first_line_pattern.search(state['buffer'])
+                match = _FIRST_LINE_PATTERN.search(state['buffer'])
                 if match:
                     first_line = match.group(1)
                     # Build environment URL
@@ -73,7 +94,7 @@ def create_log_streamer(session) -> Callable[[str, str], Awaitable[None]]:
                     state['first_line_shown'] = True
             
             # Look for execution marker
-            match = marker_pattern.search(state['buffer'])
+            match = _EXECUTION_MARKER.search(state['buffer'])
             if match:
                 state['found'] = True
                 # Print from after the marker line
@@ -1254,7 +1275,8 @@ async def handle_run_on_ssh(arguments: dict):
 {partial_block}"""
             # Include grain log on failure for debugging
             elif grain_log:
-                log_block = format_code_block(grain_log)
+                filtered_log = filter_grain_log(grain_log)
+                log_block = format_code_block(filtered_log)
                 output_text += f"""
 
 **Grain Execution Log:**
@@ -1418,9 +1440,7 @@ async def handle_run_on_persistent_container(arguments: dict):
                 text="Error preparing files:\n" + "\n".join(f"- {e}" for e in file_errors),
             )]
         if file_deploy_commands:
-            # Prepend file deployment to global init commands (don't replace them)
-            global_init = _config.get("init_commands") or ""
-            init_commands = (file_deploy_commands + "\n" + global_init) if global_init else file_deploy_commands
+            init_commands = file_deploy_commands
         for f in files:
             local = f.get("local_path", "<content>")
             remote = f.get("remote_path", "")
@@ -1518,7 +1538,8 @@ async def handle_run_on_persistent_container(arguments: dict):
 **Partial Output:**
 {partial_block}"""
             elif grain_log:
-                log_block = format_code_block(grain_log)
+                filtered_log = filter_grain_log(grain_log)
+                log_block = format_code_block(filtered_log)
                 output_text += f"""
 
 **Grain Execution Log:**
@@ -1641,7 +1662,8 @@ async def handle_run_on_disposable_container(arguments: dict):
 {partial_block}"""
             # Include grain log on failure for debugging
             elif grain_log:
-                log_block = format_code_block(grain_log)
+                filtered_log = filter_grain_log(grain_log)
+                log_block = format_code_block(filtered_log)
                 output_text += f"""
 
 **Grain Execution Log:**
@@ -1767,9 +1789,7 @@ async def handle_run_on_persistent_container_async(arguments: dict):
         if file_errors:
             return [TextContent(type="text", text="Error preparing files:\n" + "\n".join(f"- {e}" for e in file_errors))]
         if file_deploy_commands:
-            # Prepend file deployment to global init commands (don't replace them)
-            global_init = _config.get("init_commands") or ""
-            init_commands = (file_deploy_commands + "\n" + global_init) if global_init else file_deploy_commands
+            init_commands = file_deploy_commands
         for f in files:
             files_info.append(f"{f.get('local_path', '<content>')} -> {f.get('remote_path', '')}")
     
@@ -2052,14 +2072,9 @@ This may indicate a deployment failure. Check the environment URL for details.""
                 partial_output = ""
                 try:
                     grain_log = await client.get_grain_log(environment_id) or ""
-                    output_marker_pattern = re.compile(r'=== Beginning of (?:local )?execution ={50,}\n')
+                    filtered = filter_grain_log(grain_log)
                     timestamp_pattern = re.compile(r'^\[\d{2}:\d{2}:\d{2}\.\d{3}\] ', re.MULTILINE)
-                    marker_match = output_marker_pattern.search(grain_log)
-                    if marker_match:
-                        partial_output = grain_log[marker_match.end():]
-                    else:
-                        partial_output = grain_log[-1000:] if len(grain_log) > 1000 else grain_log
-                    partial_output = timestamp_pattern.sub('', partial_output)
+                    partial_output = timestamp_pattern.sub('', filtered)
                 except Exception:
                     pass
                 
@@ -2089,14 +2104,9 @@ This may indicate a deployment failure. Check the environment URL for details.""
                 partial_output = ""
                 try:
                     grain_log = await client.get_grain_log(environment_id) or ""
-                    output_marker_pattern = re.compile(r'=== Beginning of (?:local )?execution ={50,}\n')
+                    filtered = filter_grain_log(grain_log)
                     timestamp_pattern = re.compile(r'^\[\d{2}:\d{2}:\d{2}\.\d{3}\] ', re.MULTILINE)
-                    marker_match = output_marker_pattern.search(grain_log)
-                    if marker_match:
-                        partial_output = grain_log[marker_match.end():]
-                    else:
-                        partial_output = grain_log[-1000:] if len(grain_log) > 1000 else grain_log
-                    partial_output = timestamp_pattern.sub('', partial_output)
+                    partial_output = timestamp_pattern.sub('', filtered)
                 except Exception:
                     pass
                 
@@ -2223,11 +2233,6 @@ async def cli_dispatch(args):
         # - first_line_shown: whether we've printed the "Running on" header line
         # - buffer: accumulated data for finding markers
         state = {'found': verbose, 'first_line_shown': verbose, 'buffer': ''}
-        # Marker pattern - matches both "=== Beginning of execution ===" and "=== Beginning of local execution ==="
-        # Requires 50+ trailing = chars to avoid false positives from user output
-        marker_pattern = re.compile(r'=== Beginning of (?:local )?execution ={50,}\n')
-        # Pattern for first line: [HH:MM:SS.mmm] >> Running on container. Storage: . Task Id: XXX
-        first_line_pattern = re.compile(r'^(\[\d{2}:\d{2}:\d{2}\.\d{3}\] >> Running on .+)$', re.MULTILINE)
         
         async def _stream(data: str, environment_id: str = ""):
             if state['found']:
@@ -2240,7 +2245,7 @@ async def cli_dispatch(args):
             
             # Show first line with environment info if not yet shown
             if not state['first_line_shown']:
-                match = first_line_pattern.search(state['buffer'])
+                match = _FIRST_LINE_PATTERN.search(state['buffer'])
                 if match:
                     first_line = match.group(1)
                     # Build environment URL
@@ -2250,7 +2255,7 @@ async def cli_dispatch(args):
                     state['first_line_shown'] = True
             
             # Look for execution marker
-            match = marker_pattern.search(state['buffer'])
+            match = _EXECUTION_MARKER.search(state['buffer'])
             if match:
                 state['found'] = True
                 # Print from after the marker line
