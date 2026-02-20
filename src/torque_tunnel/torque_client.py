@@ -7,10 +7,15 @@ import base64
 import re
 import sys
 import time
+from pathlib import Path
 from typing import Optional, Callable, Awaitable
 from dataclasses import dataclass
 
 import httpx
+
+# Resolve blueprints directory relative to this file:
+# src/torque_tunnel/torque_client.py -> ../../.. -> project root -> /blueprints
+_BLUEPRINTS_DIR = Path(__file__).resolve().parent.parent.parent / "blueprints"
 
 
 @dataclass
@@ -30,6 +35,31 @@ class TorqueClient:
     BLUEPRINT_NAME = "remote-shell-executor"
     LOCAL_BLUEPRINT_NAME = "local-shell-executor"
     PERSISTENT_CONTAINER_BLUEPRINT = "persistent-container"
+    
+    @staticmethod
+    def _load_standalone_blueprint(blueprint_name: str) -> str:
+        """Load a blueprint YAML from the blueprints directory and return base64-encoded content.
+        
+        This enables 'standalone blueprint' mode: the full YAML is sent inline with
+        the API request, so users don't need to add the GitHub repo to their Torque space.
+        
+        Args:
+            blueprint_name: Name of the blueprint (without .yaml extension)
+            
+        Returns:
+            Base64-encoded blueprint YAML content
+            
+        Raises:
+            FileNotFoundError: If the blueprint file doesn't exist
+        """
+        blueprint_path = _BLUEPRINTS_DIR / f"{blueprint_name}.yaml"
+        if not blueprint_path.exists():
+            raise FileNotFoundError(
+                f"Blueprint file not found: {blueprint_path}. "
+                f"Expected blueprints directory at: {_BLUEPRINTS_DIR}"
+            )
+        yaml_content = blueprint_path.read_text(encoding="utf-8")
+        return base64.b64encode(yaml_content.encode("utf-8")).decode("ascii")
     
     def __init__(
         self,
@@ -155,6 +185,8 @@ class TorqueClient:
             "environment_name": environment_name,
             "duration": "PT8H",  # 8 hours (irrelevant for workflows, they auto-terminate)
             "inputs": inputs,
+            # Standalone blueprint: send YAML inline so no GitHub repo is needed
+            "base64_standalone_blueprint": self._load_standalone_blueprint(self.BLUEPRINT_NAME),
         }
         
         response = await self._client.post(
@@ -228,6 +260,8 @@ class TorqueClient:
             "environment_name": environment_name,
             "duration": "PT8H",  # 8 hours (irrelevant for workflows, they auto-terminate)
             "inputs": inputs,
+            # Standalone blueprint: send YAML inline so no GitHub repo is needed
+            "base64_standalone_blueprint": self._load_standalone_blueprint(self.LOCAL_BLUEPRINT_NAME),
         }
         
         response = await self._client.post(
@@ -806,6 +840,8 @@ class TorqueClient:
             "inputs": {
                 "agent": agent_name,
             },
+            # Standalone blueprint: send YAML inline so no GitHub repo is needed
+            "base64_standalone_blueprint": self._load_standalone_blueprint(self.PERSISTENT_CONTAINER_BLUEPRINT),
         }
         
         response = await self._client.post(
